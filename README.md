@@ -19,5 +19,5 @@ Contributions are welcome. By submitting a contribution, you agree that your
 work becomes part of this project and remains subject to this license and the
 author’s ownership unless otherwise agreed in writing.
 
-For permission requests, contribution approval, or commercial licensing
-inquiries, please contact the author directly.
+**For permission requests, contribution approval, or commercial licensing
+inquiries, please contact the author directly.**
