@@ -13,6 +13,7 @@ import lib.Profile;
 import lib.Sidebar;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import org.jetbrains.annotations.NotNull;
 import utils.Strings;
 
 public class Main extends JavaPlugin
@@ -45,7 +46,7 @@ public class Main extends JavaPlugin
 	}
 	
 	@Override
-	public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+	public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd, String label, String @NotNull [] args) {
 		
 		Player player = (Player) sender;
 		Profile profile = new Profile(player);
