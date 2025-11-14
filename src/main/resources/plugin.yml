@@ -1,0 +1,12 @@
+name: TheMinecraftPlugin
+description: The Plugin that has it all.
+load: POSTWORLD
+prefix: TheMinecraftPlugin
+version: 8.5.0
+api-version: '1.21'
+main: main.Main
+soft-depend: [PinataParty]
+authors: [Lacom, Jozeth, PatPeter, blakeman8192, Kramer]
+website: www.theminecraftplugin.com
+commands:
+  test:
