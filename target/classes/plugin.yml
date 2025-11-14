@@ -1,0 +1,19 @@
+# META
+name: TheMinecraftPlugin
+description: The Plugin that has it all.
+author: wireser
+website: www.theminecraftplugin.com
+
+# SYSTEM
+version: ${project.version}
+main: main.Main
+load: POSTWORLD
+api-version: '1.21'
+prefix: TheMinecraftPlugin
+
+# DEPENDENCIES
+soft-depend: [PinataParty]
+
+# COMMANDS
+commands:
+  test:

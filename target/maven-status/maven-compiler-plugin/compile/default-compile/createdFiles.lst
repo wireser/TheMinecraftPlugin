@@ -1,0 +1,12 @@
+lib\Sidebar.class
+lib\Profile.class
+lib\ActionBar.class
+utils\PluginLogger.class
+main\Main.class
+utils\Validator.class
+utils\Variables.class
+lib\PlayerHeads.class
+utils\Strings.class
+lib\ActionBar$1.class
+utils\MathUtils.class
+utils\MinecraftUtils.class
