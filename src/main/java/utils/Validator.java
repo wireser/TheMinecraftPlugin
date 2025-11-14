@@ -122,7 +122,7 @@ public class Validator {
 	}
 	
 	public static boolean validateString(String input) {
-		return input != null && input.isEmpty() == false;
+		return input != null && !input.isEmpty();
 	}
 	
 	public static boolean isNotNull(String input) {

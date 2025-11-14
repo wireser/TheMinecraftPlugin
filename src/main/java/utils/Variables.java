@@ -1,11 +1,7 @@
 package utils;
 
-import java.math.BigInteger;
-
 public class Variables {
 
-	private static final BigInteger UNSIGNED_BIGINT_MAX = new BigInteger("18446744073709551615");
-	
 	/**
 	 * Attempts to parse a {@code String} into an {@code Integer}.
 	 * <p>
@@ -196,41 +192,6 @@ public class Variables {
         return unsigned
                 ? in(number, 0, 4294967295L)
                 : in(number, Integer.MIN_VALUE, Integer.MAX_VALUE);
-    }
-
-    // -------------------------------------------------
-    // BIGINT
-    // -------------------------------------------------
-
-    /**
-     * Determines whether a number fits into a signed BIGINT.
-     * Signed BIGINT supports any value representable by Java's {@code long}.
-     *
-     * @param number the number to check
-     * @return always {@code true} for signed BIGINT, since {@code long} fully represents signed BIGINT
-     */
-    public static boolean isBigInt(BigInteger number) {
-        return isBigInt(number, false);
-    }
-
-    /**
-     * Determines whether a number fits into a BIGINT.
-     * Signed BIGINT supports any value representable by Java's {@code long}.
-     * Unsigned BIGINT supports 0 to 18,446,744,073,709,551,615.
-     *
-     * @param number the number to check
-     * @param unsigned {@code true} to evaluate against the unsigned range, {@code false} for signed
-     * @return {@code true} if signed (always), or if {@code number} fits the unsigned BIGINT range
-     */
-    public static boolean isBigInt(BigInteger number, boolean unsigned) {
-        if (!unsigned) {
-            // signed BIGINT fits any long -> always true
-            return true;
-        }
-
-        // unsigned BIGINT: 0 to 2^64 - 1
-        return number.compareTo(BigInteger.ZERO) >= 0 &&
-               number.compareTo(UNSIGNED_BIGINT_MAX) <= 0;
     }
 	
 }

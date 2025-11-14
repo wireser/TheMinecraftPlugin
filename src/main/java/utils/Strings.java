@@ -6,7 +6,6 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -101,7 +100,7 @@ public class Strings {
 			
 		}
 		
-		if(text == null || text.length() == 0)
+		if(text.isEmpty())
 			return null;
 		
 		return text.toString();
@@ -181,33 +180,31 @@ public class Strings {
 		String[] parts = text.split("\\s+");
 		Map<String, Long> unitToSeconds = createUnitToSecondsMap();
 
-		for (int i = 0; i < parts.length; i++) {
-			String part = parts[i];
+        for (String part : parts) {
+            if (part.isEmpty())
+                return null;
 
-			if(part.isEmpty())
-				return null;
+            if (!Validator.isAlphanumeric(part))
+                return null;
 
-			if(!Validator.isAlphanumeric(part))
-				return null;
+            String unit = part.replaceAll("[^a-zA-Z]", "");
+            String value = part.replaceAll("[^0-9]", "");
+            unit = unit.toLowerCase();
 
-			String unit = part.replaceAll("[^a-zA-Z]", "");
-			String value = part.replaceAll("[^0-9]", "");
-			unit = unit.toLowerCase();
-			
-			if(value.isEmpty() || unit.isEmpty())
-				return null; // Invalid format: missing value or unit
+            if (value.isEmpty() || unit.isEmpty())
+                return null; // Invalid format: missing value or unit
 
-			if(!Validator.isNumeric(value))
-				return null;
+            if (!Validator.isNumeric(value))
+                return null;
 
-			long amount = Long.parseLong(value);
-			Long seconds = unitToSeconds.get(unit.toLowerCase());
+            long amount = Long.parseLong(value);
+            Long seconds = unitToSeconds.get(unit.toLowerCase());
 
-			if(seconds == null)
-				return null;
+            if (seconds == null)
+                return null;
 
-			totalSeconds += amount * seconds;
-		}
+            totalSeconds += amount * seconds;
+        }
 
 		if (totalSeconds > Integer.MAX_VALUE) {
 			return null;
@@ -433,7 +430,7 @@ public class Strings {
 		// Comma style
 		// If only 1 part: just return it
 		if(parts.size() == 1) {
-			return parts.get(0);
+			return parts.getFirst();
 		}
 
 		// If 2 parts: "A and B"
@@ -647,7 +644,7 @@ public class Strings {
 	
 	/**
 	 * Translates legacy Minecraft color codes by replacing all {@code '&'} characters
-	 * with the section-sign control code {@code '\u00A7'} (also written as {@code '§'}).
+	 * with the section-sign control code {@code '§'}).
 	 *
 	 * <p>This allows strings such as {@code "&aHello"} to be interpreted by
 	 * the Minecraft client as colored text when rendered in chat, GUIs, or item
@@ -803,12 +800,12 @@ public class Strings {
 	 * @param start  the index at which to begin merging
 	 * @return a space-joined string built from all elements starting at {@code start}
 	 */
-	public static String mergeStrings(String args[], int start)
+	public static String mergeStrings(String[] args, int start)
 	{
-		String value = new String("");
+		StringBuilder value = new StringBuilder();
 		for(int i = start; i < args.length; i++)
-			value = value + args[i] + " ";
-		return removeLastChar(value);
+			value.append(args[i]).append(" ");
+		return removeLastChar(value.toString());
 	}
 
 	/**
@@ -825,7 +822,7 @@ public class Strings {
 	 * <p><b>Example transformations:</b>
 	 * <pre>
 	 *   "HELLO_WORLD"   → "Hello world"
-	 *   "user_NAME"     → "User name"
+	 *   "userNAME"     → "Username"
 	 *   "already nice"  → "Already nice"
 	 * </pre>
 	 *
@@ -926,7 +923,7 @@ public class Strings {
 		words = input.split(" ");
 
 		for(String word : words)
-			value.append(word.substring(0, 1).toUpperCase() + word.substring(1) + " ");
+			value.append(word.substring(0, 1).toUpperCase()).append(word.substring(1)).append(" ");
 
 		return removeLastChar(value.toString());
 	}
@@ -998,9 +995,9 @@ public class Strings {
 		}
 
 		ArrayList<String> strings = new ArrayList<>();
-		for(Iterator<String> iter = lines.iterator(); iter.hasNext();) {
-			wrapLineInto(iter.next(), strings, maxWidth, strict);
-		}
+        for (String line : lines) {
+            wrapLineInto(line, strings, maxWidth, strict);
+        }
 		return strings;
 	}
 
@@ -1144,7 +1141,7 @@ public class Strings {
 	 *     <ul>
 	 *       <li><b>strict = true:</b> line length is enforced to {@code maxWidth} per segment
 	 *           (except the final segment), subject to the hyphenation rule above.</li>
-	 *       <li><b>strict = false:</b> a small forward lookahead (+1..+2) is allowed to improve readability.</li>
+	 *       <li><b>strict = false:</b> a small forward lookahead (+1...+2) is allowed to improve readability.</li>
 	 *     </ul>
 	 *   </li>
 	 *   <li>Very long unbroken words will be split per the forced-split behavior described above.</li>
@@ -1186,7 +1183,7 @@ public class Strings {
 						list.add(input.substring(0, maxWidth - 1) + "-");
 						input = input.substring(maxWidth - 1).trim();
 					} else {
-						// If the chunk would be <=3, just split without hyphen
+						// If the chunk was <=3, just split without hyphen
 						list.add(input.substring(0, maxWidth));
 						input = input.substring(maxWidth).trim();
 					}
