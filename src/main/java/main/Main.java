@@ -1,146 +1,228 @@
 package main;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Random;
-
-import org.bukkit.Bukkit;
-import org.bukkit.World;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitScheduler;
 
-import cmd.CommandCentral;
-import lib.Profile;
-import net.kyori.adventure.text.format.NamedTextColor;
+import command.CommandCentral;
+import database.Database;
+import managers.ModuleManager;
+import managers.ProfileManager;
+import model.Profile;
 
+/**
+ * The main entry point of the plugin.
+ * <p>
+ * Handles plugin lifecycle, initializes core managers,
+ * database connection, command routing, and a watchdog that
+ * monitors database connectivity in real-time.
+ */
 public class Main extends JavaPlugin
 {
 
-	public static Main plugin;
-	public static FileConfiguration config;
-	public static Database database;
-	
-	public static final NamedTextColor RED         = NamedTextColor.RED;
-	public static final NamedTextColor GREEN       = NamedTextColor.GREEN;
-	public static final NamedTextColor YELLOW      = NamedTextColor.YELLOW;
-	public static final NamedTextColor WHITE       = NamedTextColor.WHITE;
-	public static final NamedTextColor GOLD        = NamedTextColor.GOLD;
-	public static final NamedTextColor GRAY        = NamedTextColor.GRAY;
-	public static final NamedTextColor AQUA        = NamedTextColor.AQUA;
-	public static final NamedTextColor BLUE        = NamedTextColor.BLUE;
-	public static final NamedTextColor BLACK       = NamedTextColor.BLACK;
-	public static final NamedTextColor PURPLE      = NamedTextColor.LIGHT_PURPLE;
-	
-	public static final NamedTextColor DARK_PURPLE = NamedTextColor.DARK_PURPLE;
-	public static final NamedTextColor DARK_RED    = NamedTextColor.DARK_RED;
-	public static final NamedTextColor DARK_AQUA   = NamedTextColor.DARK_AQUA;
-	public static final NamedTextColor DARK_BLUE   = NamedTextColor.DARK_BLUE;
-	public static final NamedTextColor DARK_GRAY   = NamedTextColor.DARK_GRAY;
-	public static final NamedTextColor DARK_GREEN  = NamedTextColor.DARK_GREEN;
-	
-	// Player lists
-	public static HashMap<Player, Profile> players = new HashMap<Player, Profile>();
+	/** Singleton instance of this plugin. */
+    private static Main instance;
 
-	// Utils
-	public static BukkitScheduler scheduler = Bukkit.getServer().getScheduler();
-	public static HashMap<World, List<String>> bannedCmds = new HashMap<World, List<String>>();
-	public static Random random = new Random();
-		
-	private static Main instance;
-	private static CommandCentral commandCentral;
-	private static ModuleManager moduleManager;
-	private boolean databaseAlive = true;
-	private int watchdogTaskId = -1;
+    /** Tracks whether the database was alive during the last watchdog check. */
+    private boolean databaseAlive = true;
+
+    /** Task ID for the repeating database watchdog task. */
+    private int watchdogTaskId = -1;
+
+    /** Primary database handler. Initialized on plugin startup. */
+    private Database database;
+
+    /** Central command handler used to route commands to subsystems. */
+    private CommandCentral commandCentral;
+
+    /** Handles all player profile storage and lifecycle. */
+    private ProfileManager profileManager;
+
+    /** Handles enabling, disabling and monitoring of plugin modules. */
+    private ModuleManager moduleManager;
+    
 	
+    /**
+     * Called when the plugin is enabled.
+     * <p>
+     * Initializes configuration, database pool, managers, modules,
+     * and starts the database watchdog task.
+     */
 	@Override
 	public void onEnable() {
 		
-		plugin = this;
+		instance = this;
+		saveDefaultConfig();
 
-		plugin.saveDefaultConfig();
-		
-		config = plugin.getConfig();
-		
 		database = new Database(this);
         try {
             database.init();
         } catch (Exception ex) {
             getLogger().severe("Failed to initialize database pool:");
             ex.printStackTrace();
-            // Kill the plugin if DB is critical
-            getServer().getPluginManager().disablePlugin(this);
+            
+            getServer().getPluginManager().disablePlugin(this); // Kill the plugin if DB is critical
             return;
         }
         
         databaseAlive = database.isAlive();
-		
-		instance = this;
-        moduleManager = new ModuleManager();
-        commandCentral = new CommandCentral();
+
+		profileManager = new ProfileManager();
+        moduleManager = new ModuleManager(this, database);
+        commandCentral = new CommandCentral(this, database);
         
-        // Register modules
         registerModules();
-        
-        // Start database watchdog
         startDatabaseWatchdog();
 
 	}
 	
+	/**
+     * Called when the plugin is disabled.
+     * <p>
+     * Ensures orderly shutdown of modules, profiles, database, and tasks.
+     */
 	@Override
-    public void onDisable() {
-		
-        // Disable all modules
-        moduleManager.disableAll();
-        
-        if(database != null)
-            database.shutdown();
-        
-        // Stop watchdog
-        if(watchdogTaskId != -1)
-            getServer().getScheduler().cancelTask(watchdogTaskId);
+	public void onDisable() {
 
-        getLogger().info("Plugin disabled.");
-        
-    }
+	    if (moduleManager != null) {
+	        moduleManager.disableAll();
+	    }
+
+	    if (profileManager != null) {
+	        profileManager.clear();
+	    }
+
+	    if (database != null) {
+	        database.shutdown();
+	    }
+
+	    if (watchdogTaskId != -1) {
+	        getServer().getScheduler().cancelTask(watchdogTaskId);
+	    }
+
+	    getLogger().info("Plugin disabled.");
+	    
+	}
 	
+	/**
+     * Command routing entry point.
+     * <p>
+     * Delegates command processing to {@link CommandCentral}, ensuring that
+     * commands are coming from players and that player profiles exist.
+     *
+     * @param sender the entity that issued the command
+     * @param cmd    the command being executed
+     * @param label  command alias used
+     * @param args   command arguments
+     * @return true if the command was handled
+     */
 	@Override
 	public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-		
-		
-		
-		return true;
-		
+
+	    if (commandCentral == null) {
+	        sender.sendMessage("Commands are not yet available.");
+	        return true;
+	    }
+
+	    if (!(sender instanceof Player)) {
+	        sender.sendMessage("This command can only be used by players.");
+	        return true;
+	    }
+
+	    Player player = (Player) sender;
+	    Profile profile = profileManager.get(player.getUniqueId());
+	    
+	    if (profile == null) {
+	        sender.sendMessage("Your profile is not loaded yet. Please try again in a moment.");
+	        return true;
+	    }
+
+	    return commandCentral.execute(profile, cmd, label, args);
 	}
 
-	public static ModuleManager getModuleManager() {
-        return moduleManager;
-    }
-    
-    public static CommandCentral getCommandCentral() {
-        return commandCentral;
-    }
-    
+	/**
+     * @return the active plugin instance
+     */
     public static Main getInstance() {
-    	return instance;
+        return instance;
     }
 
-    private void registerModules() {
-    	//moduleManager.registerModule(new EmptyModule());
+    /**
+     * Convenience wrapper for accessing the plugin configuration.
+     *
+     * @return the plugin configuration
+     */
+    public static FileConfiguration config() {
+        return getInstance().getConfig();
     }
-    
+
+    /**
+     * @return the database handler
+     */
+    public Database getDatabase() {
+        return database;
+    }
+
+    /**
+     * @return the profile manager responsible for all player profiles
+     */
+    public ProfileManager getProfileManager() {
+        return profileManager;
+    }
+
+    /**
+     * @return the module manager responsible for enabling/disabling components
+     */
+    public ModuleManager getModuleManager() {
+        return moduleManager;
+    }
+
+    /**
+     * @return the central command handler
+     */
+    public CommandCentral getCommandCentral() {
+        return commandCentral;
+    }
+
+    /**
+     * Registers all plugin modules.
+     * <p>
+     * Stub method — extend this to add module initialization.
+     */
+    private void registerModules() {
+        // moduleManager.registerModule(new EmptyModule());
+    }
+
+    /**
+     * Starts a periodic watchdog task that monitors database connectivity.
+     * <p>
+     * If the connection state changes, all modules are notified so they
+     * can adjust behavior accordingly.
+     */
     private void startDatabaseWatchdog() {
+    	
         watchdogTaskId = getServer().getScheduler().runTaskTimer(this, () -> {
+        	
+        	if(database == null) {
+        		return;
+        	}
+        	
             boolean currentState = database.isAlive();
+            
             if (currentState != databaseAlive) {
                 databaseAlive = currentState;
-                moduleManager.checkDatabaseState();
-                getLogger().info("Database state changed to: " + currentState);
+                
+                if(moduleManager != null) {
+                	moduleManager.checkDatabaseState();
+                }
+
+                getLogger().info("Database state changed to: " + (currentState ? "ALIVE" : "DOWN"));
             }
+            
         }, 100L, 100L).getTaskId(); // Check every 5 seconds (100 ticks)
+        
     }
 	
 }
