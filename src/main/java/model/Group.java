@@ -4,141 +4,168 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
-
 
 import enums.Perm;
 import net.md_5.bungee.api.ChatColor;
 
 public class Group {
 
-	// Data
-	public ChatColor color;
-	public String name;
-	public String prefix;
+    // Data
+    public ChatColor color;
+    public String name;
+    public String prefix;
 
-	// Limits
-	public Integer limitClaim;
-	public Integer limitWarps;
-	public Integer limitShops;
+    // Limits
+    public Integer limitClaim;
+    public Integer limitWarps;
+    public Integer limitShops;
 
-	// Rewards
-	public Double rewardCash;
-	public String bonus;
-	public String bonusCommand;
-	public String newCommand;
-	
-	public Integer trip;
+    // Rewards
+    public Double rewardCash;
+    public String bonus;
+    public String bonusCommand;
+    public String newCommand;
 
-	// Lists
-	public List<String> commands = new ArrayList<>();
-	public List<Perm> flags = new ArrayList<>();
+    public Integer trip;
 
-	// Initialization
-	public Group(String name, String prefix, ChatColor color, Integer trip, Integer claim, Integer warps, Integer shops, Double cash, String bonus, String newCommand, String bonusCommand) {
-		this.name = name;
-		this.prefix = prefix;
-		this.color = color;
+    // Lists
+    // NOTE: we keep this as List<String> for now to avoid breaking other code,
+    // but all *new* logic will treat it as a lowercase, de-duplicated list of labels.
+    public List<String> commands = new ArrayList<>();
+    public List<Perm> flags = new ArrayList<>();
 
-		this.limitClaim = claim;
-		this.limitWarps = warps;
-		this.limitShops = shops;
+    // Initialization
+    public Group(String name, String prefix, ChatColor color, Integer trip,
+                 Integer claim, Integer warps, Integer shops,
+                 Double cash, String bonus, String newCommand, String bonusCommand) {
 
-		this.rewardCash = cash;
-		this.bonus = bonus;
-		this.bonusCommand = bonusCommand;
-		this.newCommand = newCommand;
-		
-		this.trip = trip;
-	}
+        this.name = name;
+        this.prefix = prefix;
+        this.color = color;
 
-	/**
-	 *
-	 * @param flag
-	 */
-	public void addFlag(Perm flag) {
-		if(!flags.contains(flag))
-			flags.add(flag);
-	}
+        this.limitClaim = claim;
+        this.limitWarps = warps;
+        this.limitShops = shops;
 
-	/**
-	 *
-	 * @param flag
-	 */
-	public void removeFlag(Perm flag) {
-		if(flags.contains(flag))
-			flags.remove(flag);
-	}
+        this.rewardCash = cash;
+        this.bonus = bonus;
+        this.bonusCommand = bonusCommand;
+        this.newCommand = newCommand;
 
-	/**
-	 *
-	 * @param group
-	 */
-	public void inheritFlags(Group group) {
-		for(Perm flag : group.flags)
-			flags.add(flag);
-	}
+        this.trip = trip;
+    }
 
-	/**
-	 *
-	 * @param cmd
-	 */
-	public void addCommand(String cmd) {
-		commands.add(cmd);
-	}
+    // ===================== Flags =====================
 
-	/**
-	 *
-	 * @param cmd
-	 */
-	public void addCommand(String[] cmd) {
-		for(String _cmd_ : cmd)
-			commands.add(_cmd_);
-	}
+    public void addFlag(Perm flag) {
+        if (flag != null && !flags.contains(flag)) {
+            flags.add(flag);
+        }
+    }
 
-	/**
-	 *
-	 * @param cmd
-	 */
-	public void addCommand(List<String> cmd) {
-		for(String _cmd_ : cmd)
-			commands.add(_cmd_);
-	}
+    public void removeFlag(Perm flag) {
+        flags.remove(flag);
+    }
 
-	/**
-	 *
-	 * @param cmd
-	 */
-	public void addCommand(HashMap<String, String> cmd) {
-		for(String _cmd_ : cmd.values())
-			commands.add(_cmd_);
-	}
+    public void inheritFlags(Group group) {
+        if (group == null) return;
+        for (Perm flag : group.flags) {
+            if (!flags.contains(flag)) {
+                flags.add(flag);
+            }
+        }
+    }
 
-	/**
-	 *
-	 * @param cmd
-	 */
-	public void addCommand(Set<String> cmd) {
-		for(String _cmd_ : cmd)
-			commands.add(_cmd_);
-	}
+    // ===================== Commands =====================
 
-	/**
-	 *
-	 * @param cmd
-	 */
-	public void addCommand(Collection<String> cmd) {
-		for(String _cmd_ : cmd)
-			commands.add(_cmd_);
-	}
+    private String normalizeCommand(String cmd) {
+        return cmd == null ? null : cmd.toLowerCase(Locale.ROOT);
+    }
 
-	/**
-	 *
-	 * @param group
-	 */
-	public void inheritCommands(Group group) {
-		for(String cmd : group.commands)
-			commands.add(cmd);
-	}
+    private void addSingleCommandInternal(String cmd) {
+        if (cmd == null || cmd.isEmpty()) return;
+        String key = normalizeCommand(cmd);
 
+        // Avoid duplicates
+        if (!commands.contains(key)) {
+            commands.add(key);
+        }
+    }
+
+    /**
+     * Adds a single command label/alias to this group.
+     * Stored in lowercase, duplicate-safe.
+     */
+    public void addCommand(String cmd) {
+        addSingleCommandInternal(cmd);
+    }
+
+    public void addCommand(String[] cmd) {
+        if (cmd == null) return;
+        for (String c : cmd) {
+            addSingleCommandInternal(c);
+        }
+    }
+
+    public void addCommand(List<String> cmd) {
+        if (cmd == null) return;
+        for (String c : cmd) {
+            addSingleCommandInternal(c);
+        }
+    }
+
+    public void addCommand(Set<String> cmd) {
+        if (cmd == null) return;
+        for (String c : cmd) {
+            addSingleCommandInternal(c);
+        }
+    }
+
+    public void addCommand(Collection<String> cmd) {
+        if (cmd == null) return;
+        for (String c : cmd) {
+            addSingleCommandInternal(c);
+        }
+    }
+
+    public void addCommand(HashMap<String, String> cmd) {
+        if (cmd == null) return;
+        for (String value : cmd.values()) {
+            addSingleCommandInternal(value);
+        }
+    }
+
+    /**
+     * Inherits commands from another group.
+     * Uses the same normalized add logic (lowercase + de-duplication).
+     */
+    public void inheritCommands(Group group) {
+        if (group == null) return;
+        for (String cmd : group.commands) {
+            addSingleCommandInternal(cmd);
+        }
+    }
+
+    /**
+     * Checks if this group has access to the given command/alias.
+     * Case-insensitive.
+     */
+    public boolean hasCommand(String cmd) {
+        if (cmd == null || cmd.isEmpty()) return false;
+        String key = normalizeCommand(cmd);
+        return commands.contains(key);
+    }
+
+    /**
+     * Removes a command/alias from this group.
+     * Case-insensitive.
+     */
+    public void removeCommand(String cmd) {
+        if (cmd == null || cmd.isEmpty()) return;
+        String key = normalizeCommand(cmd);
+        commands.removeIf(c -> c.equals(key));
+    }
+    
 }

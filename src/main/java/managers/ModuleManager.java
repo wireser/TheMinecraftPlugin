@@ -17,7 +17,10 @@ public class ModuleManager {
     private final Map<String, BaseModule> modules = new HashMap<>();
     private boolean lastDatabaseState = true;
     private final Main instance;
-    private final Database database;
+    
+    
+    @SuppressWarnings("unused")
+	private final Database database;
     
     public ModuleManager(Main plugin, Database database) {
         this.instance = plugin;

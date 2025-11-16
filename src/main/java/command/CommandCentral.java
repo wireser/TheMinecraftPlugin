@@ -1,359 +1,520 @@
 package command;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
-
-import org.bukkit.command.Command;
-
-import database.Database;
 import enums.Currency;
 import main.Main;
+import managers.LanguageManager;
+import model.Group;
 import model.Profile;
 import net.kyori.adventure.text.format.NamedTextColor;
+import org.bukkit.command.Command;
+
+import java.util.*;
+import java.util.logging.Level;
 
 /**
  * Central command registry for managing all server commands.
  * Handles registration, execution, permissions, costs, and cooldowns.
  */
 public final class CommandCentral {
-    private final Map<String, CommandRegistry> commands = new HashMap<>();
-    private final Map<String, String> aliases = new HashMap<>();
-    private final CooldownManager cooldownManager = new CooldownManager();
-    private final Main instance;
-    private final Database database;
-    
-    // Configurable messages
-    public static String NO_PERMISSION_MSG = "You don't have permission for this command!";
-    public static String INSUFFICIENT_FUNDS_MSG = "You need %s %s for this!";
-    public static String COOLDOWN_ACTIVE_MSG = "Command is on cooldown! Remaining: %.1fs";
-    public static String UNKNOWN_COMMAND_MSG = "Unknown command: %s";
-    public static String SYNTAX_ERROR_MSG = "Usage: %s";
-    public static String COMMAND_ERROR_MSG = "Error: %s";
-    public static String UNAVAILABLE_ERROR_MSG = "This command is currently unavailable";
-    public static String SUBCOMMAND_PERMISSION_MSG = "You don't have permission for this subcommand!";
-    public static String MODULE_DISABLED_MSG = "Error: The module containing the %s command has been disabled.";
-    public static String COMMAND_DISABLED_MSG = "Error: The %s command is currently disabled.";
-    
-    public CommandCentral(Main plugin, Database database) {
-        this.instance = plugin;
-        this.database = database;
-    }
-    
-    /**
-     * Registers a new command with the registry.
-     * 
-     * @param command The command to register
-     */
-    public void register(CommandRegistry command) {
-        // Register main command
-        commands.put(command.getLabel().toLowerCase(), command);
-        
-        // Register aliases
-        for (String alias : command.getAliases()) {
-            aliases.put(alias.toLowerCase(), command.getLabel().toLowerCase());
-        }
-        
-        // Add command to associated group
-        if (command.getGroup() != null) {
-            command.getGroup().addCommand(command.getLabel());
-            for (String alias : command.getAliases()) {
-                command.getGroup().addCommand(alias);
-            }
-        }
-    }
 
-    /**
-     * Unregisters a command from the registry.
-     * 
-     * @param label The label of the command to unregister
-     */
-    public void unregister(String label) {
-        CommandRegistry command = commands.remove(label.toLowerCase());
-        if (command != null) {
-            // Remove all aliases
-            command.getAliases().forEach(alias -> aliases.remove(alias.toLowerCase()));
-            
-            // Remove from group
-            if (command.getGroup() != null) {
-                command.getGroup().commands.remove(command.getLabel().toLowerCase());
-                for (String alias : command.getAliases()) {
-                    command.getGroup().commands.remove(alias.toLowerCase());
-                }
-            }
-        }
-    }
+	// Message keys + fallbacks
 
-    /**
-     * Retrieves a command by its input (either main label or alias).
-     * 
-     * @param input The command input to look up
-     * @return Optional containing the command if found
-     */
-    public Optional<CommandRegistry> getCommand(String input) {
-        String lookup = input.toLowerCase();
-        CommandRegistry direct = commands.get(lookup);
-        if (direct != null) return Optional.of(direct);
-        
-        String aliasTarget = aliases.get(lookup);
-        if (aliasTarget != null) {
-            return Optional.ofNullable(commands.get(aliasTarget));
-        }
-        return Optional.empty();
-    }
+	// unknown command
+	private static final String KEY_UNKNOWN_COMMAND      = "command.unknown";
+	private static final String FMT_UNKNOWN_COMMAND      = "Unknown command: %s";
 
-    /**
-     * Executes a command with proper validation and error handling.
-     * 
-     * @param player The player executing the command
-     * @param commandInput The command input (main label or alias)
-     * @param args The command arguments
-     * @return true if command was found and processed, false otherwise
-     */
-    public boolean execute(Profile player, Command command, String commandInput, String[] args) {
-        Optional<CommandRegistry> cmdOpt = getCommand(commandInput);
-        if (!cmdOpt.isPresent()) {
-            player.msg(NamedTextColor.RED, UNKNOWN_COMMAND_MSG, commandInput);
-            return false;
-        }
+	// generic perms
+	private static final String KEY_NO_PERMISSION        = "command.no_permission";
+	private static final String MSG_NO_PERMISSION        = "You don't have permission for this command!";
 
-        CommandRegistry cmd = cmdOpt.get();
-        
-        // Check group-based visibility
-        if (!isCommandVisible(player, cmd)) {
-            player.msg(NamedTextColor.RED, UNKNOWN_COMMAND_MSG, commandInput);
-            return true;
-        }
-        
-        // Check if module is enabled
-        if (!isModuleEnabled(cmd.getModuleName())) {
-            player.msg(NamedTextColor.RED, MODULE_DISABLED_MSG, commandInput.toLowerCase());
-            return true;
-        }
-        
-        // Check if command is enabled
-        if (!cmd.isEnabled()) {
-            player.msg(NamedTextColor.RED, COMMAND_DISABLED_MSG, commandInput.toLowerCase());
-            return true;
-        }
-        
-        // Check specific permission node if configured
-        if (cmd.getPermissionNode() != null && !player.player.hasPermission(cmd.getPermissionNode())) {
-            player.msg(NamedTextColor.RED, NO_PERMISSION_MSG);
-            return true;
-        }
-        
-        // Check costs
-        if (!checkCosts(player, cmd)) {
-            return true;
-        }
-        
-        // Check cooldown if applicable
-        if (cmd.getCooldownSeconds() > 0 && !cooldownManager.checkCooldown(player.getUuid(), cmd)) {
-            player.msg(NamedTextColor.RED, COOLDOWN_ACTIVE_MSG, 
-                      cooldownManager.getRemaining(player.getUuid(), cmd));
-            return true;
-        }
-        
-        try {
-            // Execute the command
-            cmd.getExecutor().execute(player, commandInput, args);
-            
-            // Apply costs and cooldown after successful execution
-            applyCosts(player, cmd);
-            if (cmd.getCooldownSeconds() > 0) {
-                cooldownManager.applyCooldown(player.getUuid(), cmd);
-            }
-            return true;
-        } catch (CommandException e) {
-            handleCommandException(player, cmd, e);
-            return true;
-        } catch (Exception e) {
-            // Handle unexpected exceptions
-            player.msg(NamedTextColor.RED, UNAVAILABLE_ERROR_MSG);
-            e.printStackTrace();
-            return true;
-        }
-    }
+	// subcommand perms
+	private static final String KEY_NO_SUB_PERMISSION    = "command.no_sub_permission";
+	private static final String MSG_NO_SUB_PERMISSION    = "You don't have permission for this subcommand!";
 
-    /**
-     * Checks if a command is visible to a player based on their group.
-     * 
-     * @param player The player to check
-     * @param cmd The command to check visibility for
-     * @return true if the command is visible, false otherwise
-     */
-    private boolean isCommandVisible(Profile player, CommandRegistry cmd) {
-        // Check if command is explicitly available in player's group
-        return player.getGroup().commands.contains(cmd.getLabel().toLowerCase()) ||
-               cmd.getAliases().stream()
-                  .anyMatch(alias -> player.getGroup().commands.contains(alias.toLowerCase()));
-    }
+	// disabled / module
+	private static final String KEY_MODULE_DISABLED      = "command.module_disabled";
+	private static final String FMT_MODULE_DISABLED      = "Error: The module containing the %s command has been disabled.";
 
-    /**
-     * Checks if a module is enabled.
-     * 
-     * @param moduleName The name of the module to check
-     * @return true if the module is enabled, false otherwise
-     */
-    private boolean isModuleEnabled(String moduleName) {
-        // Implement your module enabled check here
-        // This could be from a configuration or module manager
-        return instance.getModuleManager().isModuleEnabled(moduleName);
-    }
-    
-    /**
-     * Checks if a player has sufficient funds for a command.
-     * 
-     * @param player The player to check
-     * @param cmd The command with associated cost
-     * @return true if player can afford the command, false otherwise
-     */
-    private boolean checkCosts(Profile player, CommandRegistry cmd) {
-        if (cmd.getCost() > 0) {
-            Currency currency = cmd.getCurrency();
-            double balance = player.getBalance(currency);
-            
-            // Format cost based on currency type
-            String formattedCost = formatCurrency(cmd.getCost(), currency);
-            
-            if (balance < cmd.getCost()) {
-                player.msg(NamedTextColor.RED, INSUFFICIENT_FUNDS_MSG, 
-                          formattedCost, currency.name().toLowerCase());
-                return false;
-            }
-        }
-        return true;
-    }
+	private static final String KEY_COMMAND_DISABLED     = "command.disabled";
+	private static final String FMT_COMMAND_DISABLED     = "Error: The %s command is currently disabled.";
 
-    /**
-     * Formats a currency value appropriately for its type.
-     * 
-     * @param amount The amount to format
-     * @param currency The currency type
-     * @return Formatted currency string
-     */
-    private String formatCurrency(double amount, Currency currency) {
-        if (currency.isIntegerType()) {
-            return String.valueOf((int) Math.round(amount));
-        } else {
-            return String.format("%.2f", amount);
-        }
-    }
+	// costs
+	private static final String KEY_INSUFFICIENT_FUNDS   = "command.insufficient_funds";
+	private static final String FMT_INSUFFICIENT_FUNDS   = "You need %s %s for this!";
 
-    /**
-     * Applies command costs to a player after successful execution.
-     * 
-     * @param player The player to deduct costs from
-     * @param cmd The command with associated cost
-     */
-    private void applyCosts(Profile player, CommandRegistry cmd) {
-        if (cmd.getCost() > 0) {
-            Currency currency = cmd.getCurrency();
-            double amount = cmd.getCost();
-            
-            // For integer currencies, round to nearest whole number
-            if (currency.isIntegerType()) {
-                amount = Math.round(amount);
-            }
-            
-            player.removeBalance(amount, currency);
-        }
-    }
+	// cooldown
+	private static final String KEY_COOLDOWN_ACTIVE      = "command.cooldown";
+	private static final String FMT_COOLDOWN_ACTIVE      = "Command is on cooldown! Remaining: %.1fs";
 
-    /**
-     * Handles different types of command exceptions with appropriate messaging.
-     * 
-     * @param player The player who executed the command
-     * @param cmd The command that caused the exception
-     * @param e The exception that occurred
-     */
-    private void handleCommandException(Profile player, CommandRegistry cmd, CommandException e) {
-        switch (e.getType()) {
-            case SYNTAX_ERROR:
-                player.msg(NamedTextColor.RED, COMMAND_ERROR_MSG, e.getMessage());
-                if (cmd.getSyntax() != null && !cmd.getSyntax().isEmpty()) {
-                    player.msg(NamedTextColor.RED, SYNTAX_ERROR_MSG, cmd.getSyntax());
-                }
-                break;
-                
-            case PERMISSION_ERROR:
-                player.msg(NamedTextColor.RED, NO_PERMISSION_MSG);
-                break;
-                
-            case SUBCOMMAND_PERMISSION:
-                player.msg(NamedTextColor.RED, SUBCOMMAND_PERMISSION_MSG);
-                break;
-                
-            case UNAVAILABLE:
-                player.msg(NamedTextColor.RED, UNAVAILABLE_ERROR_MSG);
-                break;
-                
-            case GENERAL_ERROR:
-            default:
-                player.msg(NamedTextColor.RED, COMMAND_ERROR_MSG, e.getMessage());
-                break;
-        }
-    }
-}
+	// syntax & errors
+	private static final String KEY_SYNTAX_USAGE         = "command.syntax.usage";
+	private static final String FMT_SYNTAX_USAGE         = "Usage: %s";
 
-/**
- * Manages command cooldowns for players.
- */
-class CooldownManager {
-    private final Map<UUID, Map<String, Long>> cooldowns = new HashMap<>();
+	private static final String KEY_COMMAND_ERROR        = "command.error.prefix";
+	private static final String FMT_COMMAND_ERROR        = "Error: %s";
 
-    /**
-     * Checks if a command is off cooldown for a player.
-     * 
-     * @param playerId The player's UUID
-     * @param command The command to check
-     * @return true if command is off cooldown, false otherwise
-     */
-    public boolean checkCooldown(UUID playerId, CommandRegistry command) {
-        if (command.getCooldownSeconds() <= 0) return true;
-        
-        long current = System.currentTimeMillis();
-        Long lastUsed = getCooldownMap(playerId).get(command.getLabel());
-        return lastUsed == null || (current - lastUsed) > command.getCooldownSeconds() * 1000L;
-    }
+	private static final String KEY_UNAVAILABLE          = "command.unavailable";
+	private static final String MSG_UNAVAILABLE          = "This command is currently unavailable.";
+	
+	private final Map<String, CommandRegistry> commands = new HashMap<>();
+	private final Map<String, String> aliases = new HashMap<>();
+	private final CooldownManager cooldownManager = new CooldownManager();
+	private final LanguageManager language;
+	private final Main instance;
+	
+	// Will be used later for DB logging / analytics
+	@SuppressWarnings("unused")
+	private final database.Database database;
 
-    /**
-     * Gets the remaining cooldown time for a command.
-     * 
-     * @param playerId The player's UUID
-     * @param command The command to check
-     * @return Remaining cooldown time in seconds
-     */
-    public double getRemaining(UUID playerId, CommandRegistry command) {
-        Long lastUsed = getCooldownMap(playerId).get(command.getLabel());
-        if (lastUsed == null) return 0;
-        
-        long elapsed = System.currentTimeMillis() - lastUsed;
-        double remaining = command.getCooldownSeconds() - (elapsed / 1000.0);
-        return Math.max(0, remaining);
-    }
+	public CommandCentral(Main plugin, database.Database database, LanguageManager language) {
+	    this.instance = plugin;
+	    this.database = database;
+	    this.language = language;
+	}
 
-    /**
-     * Applies a cooldown to a command for a player.
-     * 
-     * @param playerId The player's UUID
-     * @param command The command to apply cooldown to
-     */
-    public void applyCooldown(UUID playerId, CommandRegistry command) {
-        if (command.getCooldownSeconds() > 0) {
-            getCooldownMap(playerId).put(command.getLabel(), System.currentTimeMillis());
-        }
-    }
+	/**
+	 * Registers a new command with the registry.
+	 *
+	 * @param command The command to register
+	 */
+	public void register(CommandRegistry command) {
+		String labelKey = command.getLabel().toLowerCase(Locale.ROOT);
 
-    /**
-     * Gets the cooldown map for a player, creating if necessary.
-     * 
-     * @param playerId The player's UUID
-     * @return The player's cooldown map
-     */
-    private Map<String, Long> getCooldownMap(UUID playerId) {
-        return cooldowns.computeIfAbsent(playerId, k -> new HashMap<>());
-    }
+		if (commands.containsKey(labelKey)) {
+			instance.getLogger().warning(String.format(
+					"Overwriting existing command registration for label '%s' with %s",
+					labelKey,
+					command.getClass().getName()
+			));
+		}
+
+		commands.put(labelKey, command);
+
+		for (String alias : command.getAliases()) {
+			if (alias == null || alias.isEmpty()) continue;
+			String aliasKey = alias.toLowerCase(Locale.ROOT);
+
+			if (aliases.containsKey(aliasKey)) {
+				instance.getLogger().warning(String.format(
+						"Alias '%s' for command '%s' is already used by '%s'. Overwriting.",
+						aliasKey,
+						command.getLabel(),
+						aliases.get(aliasKey)
+				));
+			}
+
+			aliases.put(aliasKey, labelKey);
+		}
+
+		Group group = command.getGroup();
+		if (group != null) {
+			group.addCommand(command.getLabel());
+			for (String alias : command.getAliases()) {
+				group.addCommand(alias);
+			}
+		}
+	}
+
+	/**
+	 * Unregisters a command from the registry.
+	 *
+	 * @param label The label of the command to unregister
+	 */
+	public void unregister(String label) {
+		if (label == null) return;
+
+		CommandRegistry command = commands.remove(label.toLowerCase(Locale.ROOT));
+		if (command != null) {
+			// Remove all aliases pointing to it
+			command.getAliases().forEach(alias -> {
+				if (alias == null || alias.isEmpty()) return;
+				aliases.remove(alias.toLowerCase(Locale.ROOT));
+			});
+
+			// Remove from group
+			Group group = command.getGroup();
+			if (group != null) {
+				group.removeCommand(command.getLabel());
+				for (String alias : command.getAliases()) {
+					group.removeCommand(alias);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Retrieves a command by its input (either main label or alias).
+	 *
+	 * @param input The command input to look up
+	 * @return Optional containing the command if found
+	 */
+	public Optional<CommandRegistry> getCommand(String input) {
+		if (input == null) return Optional.empty();
+
+		String lookup = input.toLowerCase(Locale.ROOT);
+		CommandRegistry direct = commands.get(lookup);
+		if (direct != null) {
+			return Optional.of(direct);
+		}
+
+		String aliasTarget = aliases.get(lookup);
+		if (aliasTarget != null) {
+			return Optional.ofNullable(commands.get(aliasTarget));
+		}
+		return Optional.empty();
+	}
+
+	/**
+	 * Executes a command with proper validation and error handling.
+	 *
+	 * @param player	   The player executing the command (wrapped profile)
+	 * @param bukkitCmd   The Bukkit Command instance associated with this execution
+	 * @param commandInput The command input (main label or alias as typed)
+	 * @param args		 The command arguments
+	 * @return true if the input was recognized as a registered command and was
+	 * handled (executed or rejected with a message), false if no such
+	 * command exists.
+	 */
+	public boolean execute(Profile player, Command bukkitCmd, String commandInput, String[] args) {
+
+		// Resolve which label was actually used
+		String usedLabel = (commandInput != null && !commandInput.isEmpty())
+				? commandInput
+				: (bukkitCmd != null ? bukkitCmd.getName() : null);
+
+		if (usedLabel == null || usedLabel.isEmpty()) {
+		    String msg = language.getFormatted(
+		        KEY_UNKNOWN_COMMAND,
+		        FMT_UNKNOWN_COMMAND,
+		        ""
+		    );
+		    player.msg(NamedTextColor.RED, msg);
+		    return false;
+		}
+
+		CommandRegistry cmd = getCommand(usedLabel).orElse(null);
+		if (cmd == null) {
+		    String msg = language.getFormatted(
+		        KEY_UNKNOWN_COMMAND,
+		        FMT_UNKNOWN_COMMAND,
+		        usedLabel
+		    );
+		    player.msg(NamedTextColor.RED, msg);
+		    return false;
+		}
+
+		if (!isCommandVisible(player, cmd)) {
+		    // Intentionally pretend the command does not exist for this group
+		    String msg = language.getFormatted(
+		        KEY_UNKNOWN_COMMAND,
+		        FMT_UNKNOWN_COMMAND,
+		        usedLabel
+		    );
+		    player.msg(NamedTextColor.RED, msg);
+		    return true;
+		}
+
+		// Module check
+		if (!isModuleEnabled(cmd.getModuleName())) {
+			player.msg(
+				    NamedTextColor.RED,
+				    language.getFormatted(
+				        KEY_MODULE_DISABLED,
+				        FMT_MODULE_DISABLED,
+				        usedLabel.toLowerCase(Locale.ROOT)
+				    )
+				);
+			return true;
+		}
+
+		// Command enabled check
+		if (!cmd.isEnabled()) {
+			player.msg(
+				    NamedTextColor.RED,
+				    language.getFormatted(
+				        KEY_COMMAND_DISABLED,
+				        FMT_COMMAND_DISABLED,
+				        usedLabel.toLowerCase(Locale.ROOT)
+				    )
+				);
+			return true;
+		}
+
+		// Permission check
+		if (cmd.hasPermissionNode() && !player.hasPermission(cmd.getPermissionNode())) {
+			String noPerm = language.get(KEY_NO_PERMISSION, MSG_NO_PERMISSION);
+			player.msg(NamedTextColor.RED, noPerm);
+			return true;
+		}
+
+		// Costs
+		if (!checkCosts(player, cmd)) {
+		    Currency currency = cmd.getCurrency();       // must be non-null here, or we skipped earlier
+		    double required  = getEffectiveCost(cmd);
+		    String formatted = formatCurrency(required, currency);
+
+		    player.msg(
+		        NamedTextColor.RED,
+		        language.getFormatted(
+		            KEY_INSUFFICIENT_FUNDS,
+		            FMT_INSUFFICIENT_FUNDS,
+		            formatted,
+		            currency.name()
+		        )
+		    );
+		    return true;
+		}
+
+		// Cooldown
+		if (cmd.getCooldownSeconds() > 0 && !cooldownManager.checkCooldown(player.getUuid(), cmd)) {
+			double remaining = cooldownManager.getRemaining(player.getUuid(), cmd);
+			player.msg(
+			    NamedTextColor.RED,
+			    language.getFormatted(
+			        KEY_COOLDOWN_ACTIVE,
+			        FMT_COOLDOWN_ACTIVE,
+			        remaining
+			    )
+			);
+			return true;
+		}
+
+		try {
+			// Execute
+			cmd.getExecutor().execute(player, usedLabel, args);
+
+			// Post: costs + cooldown
+			applyCosts(player, cmd);
+			if (cmd.getCooldownSeconds() > 0) {
+				cooldownManager.applyCooldown(player.getUuid(), cmd);
+			}
+
+			// TODO hook DB logging here
+			// logCommandExecution(player, cmd, bukkitCmd, usedLabel, args);
+
+			return true;
+		} catch (CommandException e) {
+			handleCommandException(player, cmd, e);
+			return true;
+		} catch (Exception e) {
+		    // Treat as GENERAL_ERROR for logging purposes
+		    instance.getLogger().log(
+		        Level.SEVERE,
+		        String.format(
+		            "Unhandled exception while executing command '%s' for player %s",
+		            cmd.getLabel(),
+		            player.getUuid()
+		        ),
+		        e
+		    );
+
+		    String msg = language.get(KEY_UNAVAILABLE, MSG_UNAVAILABLE);
+		    player.msg(NamedTextColor.RED, msg);
+		    return true;
+		}
+		
+	}
+
+	/**
+	 * Checks if a command is visible to a player based on their group.
+	 *
+	 * @param player The player to check
+	 * @param cmd	The command to check visibility for
+	 * @return true if the command is visible, false otherwise
+	 */
+	private boolean isCommandVisible(Profile player, CommandRegistry cmd) {
+		Group group = player.getGroup();
+		if (group == null) {
+			return false;
+		}
+
+		// Check label
+		if (group.hasCommand(cmd.getLabel())) {
+			return true;
+		}
+
+		// Check aliases
+		return cmd.getAliases().stream().anyMatch(group::hasCommand);
+	}
+
+	/**
+	 * Checks if a module is enabled.
+	 *
+	 * @param moduleName The name of the module to check
+	 * @return true if the module is enabled, false otherwise
+	 */
+	private boolean isModuleEnabled(String moduleName) {
+		if (moduleName == null || moduleName.isEmpty()) {
+			// No module -> treat as always enabled
+			return true;
+		}
+		return instance.getModuleManager().isModuleEnabled(moduleName);
+	}
+
+	/**
+	 * Returns the effective cost for this command, taking currency type into account.
+	 * Integer-type currencies are rounded to the nearest whole number.
+	 */
+	private double getEffectiveCost(CommandRegistry cmd) {
+		double cost = cmd.getCost();
+		Currency currency = cmd.getCurrency();
+		if (currency != null && currency.isIntegerType()) {
+			return Math.round(cost);
+		}
+		return cost;
+	}
+
+	/**
+	 * Checks if a player has sufficient funds for a command.
+	 *
+	 * @param player The player to check
+	 * @param cmd    The command with associated cost
+	 * @return true if player can afford the command (or no cost defined), false otherwise
+	 */
+	private boolean checkCosts(Profile player, CommandRegistry cmd) {
+	    double rawCost = cmd.getCost();
+	    if (rawCost <= 0) {
+	        return true; // free command
+	    }
+
+	    Currency currency = cmd.getCurrency();
+	    if (currency == null) {
+	        instance.getLogger().warning(String.format(
+	            "Command '%s' has a non-zero cost (%.2f) but no currency defined. Skipping cost.",
+	            cmd.getLabel(),
+	            rawCost
+	        ));
+	        // Treat as free from player's perspective
+	        return true;
+	    }
+
+	    double required = getEffectiveCost(cmd);
+	    double balance  = player.getBalance(currency);
+
+	    return balance >= required;
+	}
+
+	/**
+	 * Formats a currency value appropriately for its type.
+	 *
+	 * @param amount   The amount to format
+	 * @param currency The currency type
+	 * @return Formatted currency string
+	 */
+	private String formatCurrency(double amount, Currency currency) {
+		if (currency != null && currency.isIntegerType()) {
+			return String.valueOf((int) Math.round(amount));
+		} else {
+			return String.format(Locale.US, "%.2f", amount);
+		}
+	}
+
+	/**
+	 * Applies command costs to a player after successful execution.
+	 *
+	 * @param player The player to deduct costs from
+	 * @param cmd	The command with associated cost
+	 */
+	private void applyCosts(Profile player, CommandRegistry cmd) {
+		double rawCost = cmd.getCost();
+		if (rawCost <= 0) {
+			return;
+		}
+
+		Currency currency = cmd.getCurrency();
+		if (currency == null) {
+			return;
+		}
+
+		double amount = getEffectiveCost(cmd);
+		player.removeBalance(amount, currency);
+	}
+
+	private void logCommandException(CommandRegistry cmd, CommandException e) {
+	    CommandExceptionType type = e.getType();
+	    Level level = switch (type.getSeverity()) {
+            case INFO -> Level.INFO;
+            case WARN -> Level.WARNING;
+            default -> Level.SEVERE;
+        };
+
+        instance.getLogger().log(
+	        level,
+	        String.format(
+	            "CommandException while executing '%s': %s",
+	            cmd.getLabel(),
+	            e.getMessage()
+	        ),
+	        e
+	    );
+	}
+	
+	/**
+	 * Handles different types of command exceptions with appropriate messaging.
+	 *
+	 * @param player The player who executed the command
+	 * @param cmd	The command that caused the exception
+	 * @param e	  The exception that occurred
+	 */
+	private void handleCommandException(Profile player, CommandRegistry cmd, CommandException e) {
+	    CommandExceptionType type = e.getType();
+
+	    // Logging based on metadata
+	    if (type.shouldLog()) {
+	        logCommandException(cmd, e);
+	    }
+
+	    switch (type) {
+	        case SYNTAX_ERROR: {
+	            // "Error: <message>"
+	            String errorPrefix = language.getFormatted(
+	                KEY_COMMAND_ERROR,
+	                FMT_COMMAND_ERROR,
+	                e.getMessage()
+	            );
+	            player.msg(NamedTextColor.RED, errorPrefix);
+
+	            // Optional usage line
+	            if (cmd.getSyntax() != null && !cmd.getSyntax().isEmpty()) {
+	                String usage = language.getFormatted(
+	                    KEY_SYNTAX_USAGE,
+	                    FMT_SYNTAX_USAGE,
+	                    cmd.getSyntax()
+	                );
+	                player.msg(NamedTextColor.RED, usage);
+	            }
+	            break;
+	        }
+
+	        case PERMISSION_ERROR: {
+	            String noPerm = language.get(KEY_NO_PERMISSION, MSG_NO_PERMISSION);
+	            player.msg(NamedTextColor.RED, noPerm);
+	            break;
+	        }
+
+	        case SUBCOMMAND_PERMISSION: {
+	            String noSubPerm = language.get(KEY_NO_SUB_PERMISSION, MSG_NO_SUB_PERMISSION);
+	            player.msg(NamedTextColor.RED, noSubPerm);
+	            break;
+	        }
+
+	        case UNAVAILABLE_ERROR: {
+	            String unavailable = language.get(KEY_UNAVAILABLE, MSG_UNAVAILABLE);
+	            player.msg(NamedTextColor.RED, unavailable);
+	            break;
+	        }
+
+	        case GENERAL_ERROR:
+	        default: {
+	            String msg = language.getFormatted(
+	                KEY_COMMAND_ERROR,
+	                FMT_COMMAND_ERROR,
+	                e.getMessage()
+	            );
+	            player.msg(NamedTextColor.RED, msg);
+	            break;
+	        }
+	    }
+	}
+	
 }
