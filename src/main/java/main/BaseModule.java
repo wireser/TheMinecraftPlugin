@@ -1,9 +1,10 @@
 package main;
 
 import cmd.CommandCentral;
+import lib.ConfigManager;
+
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.event.Listener;
-import utils.ConfigManager;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -109,7 +110,7 @@ public abstract class BaseModule implements Listener {
         }
         
         // 2. Check database dependency
-        if (requiresDatabase && !Database.isAlive()) {
+        if (requiresDatabase && !Main.database.isAlive()) {
             log("Database unavailable - disabling module");
             enabled = false;
             return;
@@ -218,8 +219,8 @@ public abstract class BaseModule implements Listener {
      * Logs a message to database
      */
     public void logToDatabase(String message) {
-        if (Database.isAlive()) {
-            Database.insert("log_modules", "module, message", "'" + moduleName + "','" + message + "'");
+        if (Main.database.isAlive()) {
+            //Database.insert("log_modules", "module, message", "'" + moduleName + "','" + message + "'");
         } else {
             log("(DB offline) " + message);
         }

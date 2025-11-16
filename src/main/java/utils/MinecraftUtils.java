@@ -1,7 +1,11 @@
 package utils;
 
 import org.bukkit.Bukkit;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
+import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Monster;
+import org.bukkit.entity.Player;
 import org.bukkit.command.ConsoleCommandSender;
 
 public class MinecraftUtils {
@@ -43,6 +47,18 @@ public class MinecraftUtils {
 	    } catch (Exception ignored) {
 	        return false;
 	    }
+	}
+	
+	public static boolean isHuman(Entity entity) {
+		return (entity instanceof Player);
+	}
+
+	public static boolean isMonster(Entity entity) {
+		return (entity instanceof Monster);
+	}
+	
+	public static boolean isLiving(Entity entity) {
+		return (entity instanceof LivingEntity);
 	}
 	
 }
