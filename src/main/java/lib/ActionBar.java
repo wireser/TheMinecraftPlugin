@@ -46,7 +46,7 @@ public class ActionBar {
 						player.sendActionBar(Component.empty());
 					}
 				}
-			}.runTaskLater(Main.plugin, seconds * 20L); // Convert seconds to ticks (20 ticks = 1 second)
+			}.runTaskLater(Main.getInstance(), seconds * 20L); // Convert seconds to ticks (20 ticks = 1 second)
 		}
 	}
 	
