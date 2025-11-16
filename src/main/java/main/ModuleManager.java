@@ -180,7 +180,7 @@ public class ModuleManager {
      * This should be called periodically to handle database connectivity changes.
      */
     public void checkDatabaseState() {
-        boolean currentState = Database.isAlive();
+        boolean currentState = Main.database.isAlive();
         if (currentState != lastDatabaseState) {
             if (currentState) {
                 onDatabaseOnline();

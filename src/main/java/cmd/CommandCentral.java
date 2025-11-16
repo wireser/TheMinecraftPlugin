@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import enums.Currency;
+import lib.Profile;
 import main.Main;
 
 /**
@@ -127,7 +128,7 @@ public final class CommandCentral {
         }
         
         // Check specific permission node if configured
-        if (cmd.getPermissionNode() != null && !player.vanilla.hasPermission(cmd.getPermissionNode())) {
+        if (cmd.getPermissionNode() != null && !player.player.hasPermission(cmd.getPermissionNode())) {
             player.msg(Main.RED, NO_PERMISSION_MSG);
             return true;
         }

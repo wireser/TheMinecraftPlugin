@@ -1,5 +1,7 @@
 package cmd;
 
+import lib.Profile;
+
 /**
  * Functional interface for command execution logic.
  */
