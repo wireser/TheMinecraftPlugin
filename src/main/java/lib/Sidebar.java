@@ -12,6 +12,7 @@ import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import utils.Strings;
 import main.Main;
+import model.Profile;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -122,7 +123,7 @@ public class Sidebar {
 	public static void displaySidebar(Profile playerProfile) {
 		
 		// Early validation to avoid unnecessary processing for offline players
-		if(Main.plugin == null || Main.plugin.getServer().getScoreboardManager() == null)
+		if(Main.getInstance() == null || Main.getInstance().getServer().getScoreboardManager() == null)
 			return;
 		
 		Player player = playerProfile.player;
@@ -135,8 +136,8 @@ public class Sidebar {
 			// Only create new scoreboard if player is using main scoreboard
 			Scoreboard currentScoreboard = player.getScoreboard();
 			
-			if(currentScoreboard.equals(Main.plugin.getServer().getScoreboardManager().getMainScoreboard())) {
-				Scoreboard newScoreboard = Main.plugin.getServer().getScoreboardManager().getNewScoreboard();
+			if(currentScoreboard.equals(Main.getInstance().getServer().getScoreboardManager().getMainScoreboard())) {
+				Scoreboard newScoreboard = Main.getInstance().getServer().getScoreboardManager().getNewScoreboard();
 				player.setScoreboard(newScoreboard);
 			}
 			
@@ -293,7 +294,7 @@ public class Sidebar {
 		String playerName = playerProfile != null ? playerProfile.ign : "unknown";
 		
 		// Only log the first occurrence to prevent spam
-		Main.plugin.getLogger().log(Level.WARNING, "Sidebar error for {0}: {1}", new Object[]{playerName, message});
+		Main.getInstance().getLogger().log(Level.WARNING, "Sidebar error for {0}: {1}", new Object[]{playerName, message});
 		
 	}
 
