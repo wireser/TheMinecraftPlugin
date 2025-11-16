@@ -66,4 +66,12 @@ public class Profile {
 		
 	}
 	
+	public boolean hasPermission(String node) {
+		if(player == null || node == null || node.isEmpty())
+			return false;
+		if(player.isOp())
+			return true;
+		return player.hasPermission(node);
+	}
+	
 }
