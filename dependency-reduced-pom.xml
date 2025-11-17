@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.wireser.minecraft</groupId>
   <artifactId>TheMinecraftPlugin</artifactId>
-  <name>TheMinecraftPlugin</name>
+  <name>The Minecraft Plugin</name>
   <version>1.0.0</version>
   <description>The only plugin we will ever need.</description>
   <url>https://github.com/wireser/TheMinecraftPlugin</url>
@@ -40,6 +40,7 @@
     <url>https://github.com/wireser</url>
   </organization>
   <build>
+    <finalName>${project.artifactId}-${project.version}</finalName>
     <plugins>
       <plugin>
         <artifactId>maven-resources-plugin</artifactId>
@@ -71,11 +72,26 @@
             </goals>
             <configuration>
               <createDependencyReducedPom>true</createDependencyReducedPom>
-              <minimizeJar>true</minimizeJar>
+              <minimizeJar>false</minimizeJar>
+              <relocations>
+                <relocation>
+                  <pattern>com.zaxxer.hikari</pattern>
+                  <shadedPattern>com.wireser.minecraft.shaded.hikari</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.mysql</pattern>
+                  <shadedPattern>com.wireser.minecraft.shaded.mysql</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.google.gson</pattern>
+                  <shadedPattern>com.wireser.minecraft.shaded.gson</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.json</pattern>
+                  <shadedPattern>com.wireser.minecraft.shaded.json</shadedPattern>
+                </relocation>
+              </relocations>
               <transformers>
-                <transformer>
-                  <mainClass>com.wireser.minecraft.Main</mainClass>
-                </transformer>
                 <transformer>
                   <resource>plugin.yml</resource>
                 </transformer>
@@ -85,8 +101,15 @@
         </executions>
       </plugin>
       <plugin>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>${maven-surefire-plugin.version}</version>
+        <configuration>
+          <failIfNoTests>false</failIfNoTests>
+        </configuration>
+      </plugin>
+      <plugin>
         <artifactId>maven-enforcer-plugin</artifactId>
-        <version>3.5.0</version>
+        <version>${maven-enforcer-plugin.version}</version>
         <executions>
           <execution>
             <id>enforce-java</id>
@@ -140,9 +163,11 @@
     <hikari.version>7.0.2</hikari.version>
     <gson.version>2.13.2</gson.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <maven-shade-plugin.version>3.5.1</maven-shade-plugin.version>
+    <maven-shade-plugin.version>3.6.1</maven-shade-plugin.version>
     <json.version>20250517</json.version>
-    <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+    <maven-compiler-plugin.version>3.14.1</maven-compiler-plugin.version>
+    <maven-enforcer-plugin.version>3.6.2</maven-enforcer-plugin.version>
+    <maven-surefire-plugin.version>3.5.4</maven-surefire-plugin.version>
     <paper.version>1.21.10-R0.1-SNAPSHOT</paper.version>
     <maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
     <mysql.version>9.5.0</mysql.version>
