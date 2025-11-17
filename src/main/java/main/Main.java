@@ -4,7 +4,8 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
-
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.core.config.Configurator;
 import command.CommandCentral;
 import database.Database;
 import managers.ConfigManager;
@@ -42,7 +43,12 @@ public class Main extends JavaPlugin
 	private SimpleLanguageManager languageManager;
 	
 	private ConfigManager mainConfig;
-	
+
+    @Override
+    public void onLoad() {
+        muteHikariLoggers();
+    }
+
 	/**
 	 * Called when the plugin is enabled.
 	 * <p>
@@ -183,5 +189,18 @@ public class Main extends JavaPlugin
 	private void registerModules() {
 		// moduleManager.registerModule(new EmptyModule());
 	}
+
+    private void muteHikariLoggers() {
+        try {
+            // Base package logger
+            Configurator.setLevel("com.wireser.minecraft.shaded.hikari", Level.OFF);
+
+            // The two specific noisy ones shown in console
+            Configurator.setLevel("com.wireser.minecraft.shaded.hikari.HikariDataSource", Level.OFF);
+            Configurator.setLevel("com.wireser.minecraft.shaded.hikari.pool.HikariPool", Level.OFF);
+        } catch (Throwable t) {
+            getLogger().warning("Could not adjust Hikari logger levels via Log4j2. This only affects cosmetic startup logs.");
+        }
+    }
 	
 }
