@@ -2,12 +2,12 @@ package main;
 
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
-import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import command.CommandCentral;
 import database.Database;
+import managers.ConfigManager;
 import managers.LanguageManager;
 import managers.ModuleManager;
 import managers.ProfileManager;
@@ -27,12 +27,6 @@ public class Main extends JavaPlugin
 	/** Singleton instance of this plugin. */
 	private static Main instance;
 
-	/** Tracks whether the database was alive during the last watchdog check. */
-	private boolean databaseAlive = true;
-
-	/** Task ID for the repeating database watchdog task. */
-	private int watchdogTaskId = -1;
-
 	/** Primary database handler. Initialized on plugin startup. */
 	private Database database;
 
@@ -47,6 +41,7 @@ public class Main extends JavaPlugin
 	
 	private SimpleLanguageManager languageManager;
 	
+	private ConfigManager mainConfig;
 	
 	/**
 	 * Called when the plugin is enabled.
@@ -58,20 +53,31 @@ public class Main extends JavaPlugin
 	public void onEnable() {
 		
 		instance = this;
-		saveDefaultConfig();
 
-		database = new Database(this);
-		try {
-			database.init();
-		} catch (Exception ex) {
-			getLogger().severe("Failed to initialize database pool:");
-			ex.printStackTrace();
-			
-			getServer().getPluginManager().disablePlugin(this); // Kill the plugin if DB is critical
-			return;
-		}
-		
-		databaseAlive = database.isAlive();
+		// Config
+        mainConfig = new ConfigManager(this, "config");
+        mainConfig.setup();
+
+		database = new Database(this, mainConfig);
+
+        // Let DB notify modules when state changes:
+        database.setStateListener((oldStatus, newStatus) -> {
+            if (moduleManager != null) {
+                moduleManager.checkDatabaseState();
+            }
+            getLogger().info("Database state changed: " + oldStatus + " -> " + newStatus);
+        });
+
+        try {
+            database.init();
+        } catch (Exception ex) {
+            getLogger().severe("Failed to initialize database pool:");
+            ex.printStackTrace();
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
+        database.startWatchdog();
 
 		languageManager = new SimpleLanguageManager(); 
 		profileManager = new ProfileManager();
@@ -79,8 +85,7 @@ public class Main extends JavaPlugin
 		commandCentral = new CommandCentral(this, database, languageManager);
 		
 		registerModules();
-		startDatabaseWatchdog();
-
+		
 	}
 	
 	/**
@@ -101,10 +106,6 @@ public class Main extends JavaPlugin
 
 		if (database != null) {
 			database.shutdown();
-		}
-
-		if (watchdogTaskId != -1) {
-			getServer().getScheduler().cancelTask(watchdogTaskId);
 		}
 
 		getLogger().info("Plugin disabled.");
@@ -154,14 +155,9 @@ public class Main extends JavaPlugin
 		return instance;
 	}
 
-	/**
-	 * Convenience wrapper for accessing the plugin configuration.
-	 *
-	 * @return the plugin configuration
-	 */
-	public static FileConfiguration config() {
-		return getInstance().getConfig();
-	}
+	public ConfigManager getMainConfig() {
+        return mainConfig;
+    }
 
 	public LanguageManager getLanguageManager() {
         return languageManager;
@@ -202,36 +198,6 @@ public class Main extends JavaPlugin
 	 */
 	private void registerModules() {
 		// moduleManager.registerModule(new EmptyModule());
-	}
-
-	/**
-	 * Starts a periodic watchdog task that monitors database connectivity.
-	 * <p>
-	 * If the connection state changes, all modules are notified so they
-	 * can adjust behavior accordingly.
-	 */
-	private void startDatabaseWatchdog() {
-		
-		watchdogTaskId = getServer().getScheduler().runTaskTimer(this, () -> {
-			
-			if(database == null) {
-				return;
-			}
-			
-			boolean currentState = database.isAlive();
-			
-			if (currentState != databaseAlive) {
-				databaseAlive = currentState;
-				
-				if(moduleManager != null) {
-					moduleManager.checkDatabaseState();
-				}
-
-				getLogger().info("Database state changed to: " + (currentState ? "ALIVE" : "DOWN"));
-			}
-			
-		}, 100L, 100L).getTaskId(); // Check every 5 seconds (100 ticks)
-		
 	}
 	
 }
