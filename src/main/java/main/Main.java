@@ -1,10 +1,5 @@
 package main;
 
-import java.util.logging.Filter;
-import java.util.logging.Handler;
-import java.util.logging.LogManager;
-import java.util.logging.Logger;
-
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -99,34 +94,6 @@ public class Main extends JavaPlugin
 
 		getLogger().info("Plugin disabled.");
 		
-	}
-
-	@Override
-	public void onLoad() {
-	    Logger root = LogManager.getLogManager().getLogger("");
-
-	    for (Handler handler : root.getHandlers()) {
-	        Handler original = handler;
-
-	        // Wrap existing filter with ours (so we don't nuke other plugins' filters)
-	        Filter existing = original.getFilter();
-
-	        original.setFilter(record -> {
-	            String loggerName = record.getLoggerName();
-
-	            // Drop all logs from shaded Hikari
-	            if (loggerName != null && loggerName.startsWith("com.wireser.minecraft.shaded.hikari")) {
-	                return false;
-	            }
-
-	            // Preserve any previous filter logic if it existed
-	            if (existing != null && !existing.isLoggable(record)) {
-	                return false;
-	            }
-
-	            return true;
-	        });
-	    }
 	}
 	
 	/**

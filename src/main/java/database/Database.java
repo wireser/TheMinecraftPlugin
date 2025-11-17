@@ -96,11 +96,12 @@ public final class Database {
      * expected to abort plugin startup.
      */
     public void init() {
+    	
         if (dataSource != null && !dataSource.isClosed()) {
             logger.warning(DB_PREFIX + "Database.init() called but pool is already initialized. Ignoring.");
             return;
         }
-
+        
         FileConfiguration root = configManager.getConfig();
         ConfigurationSection db = root.getConfigurationSection("Database");
         if (db == null) {
@@ -602,5 +603,5 @@ public final class Database {
             }
         }
     }
-    
+
 }
