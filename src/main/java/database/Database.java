@@ -7,6 +7,7 @@ import managers.ConfigManager;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 
+import java.nio.charset.Charset;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.logging.Level;
@@ -57,6 +58,32 @@ public final class Database {
         this.configManager = configManager;
         this.logger = plugin.getLogger();
     }
+    
+    /**
+     * Convenience entry point for plugin startup.
+     * <p>
+     * Initializes the connection pool and starts the watchdog. If anything
+     * goes wrong, a concise error with code is logged and the owning plugin
+     * is disabled. The caller does not need to handle any exceptions.
+     *
+     * @return {@code true} if initialization succeeded, {@code false} if the
+     *         plugin was disabled due to a fatal database problem
+     */
+    public boolean initializeAndStartWatchdog() {
+        try {
+            init();
+            startWatchdog();
+            return true;
+        } catch (DatabaseInitException ex) {
+            logger.severe(String.format(
+                    "Failed to initialize database pool (%s): %s",
+                    ex.getCode(),
+                    ex.getMessage()
+            ));
+            plugin.getServer().getPluginManager().disablePlugin(plugin);
+            return false;
+        }
+    }
 
     /**
      * Initializes the HikariCP connection pool using the {@code Database}
@@ -65,7 +92,7 @@ public final class Database {
      * This method performs strict validation of all connection-critical
      * settings (host, port, database name, user, password, etc.). If any
      * required value is missing or invalid, or if the initial health check
-     * fails, an {@link IllegalStateException} is thrown and the caller is
+     * fails, a {@link DatabaseInitException} is thrown and the caller is
      * expected to abort plugin startup.
      */
     public void init() {
@@ -77,7 +104,7 @@ public final class Database {
         FileConfiguration root = configManager.getConfig();
         ConfigurationSection db = root.getConfigurationSection("Database");
         if (db == null) {
-            throw new IllegalStateException("Missing 'Database' section in config.yml");
+            throw fail("DB-CONFIG-001", "Missing 'Database' section in config.yml.");
         }
 
         // === Required / connection-critical settings (with length bounds) ===
@@ -106,20 +133,27 @@ public final class Database {
                     "MySQL just needs a password, not bedtime reading.");
         }
 
-        int port = configManager.getIntStrictRange(
-                db, "Port", 1, 65535, "Database.Port"
-        );
+        int port;
+        try {
+            port = configManager.getIntStrictRange(
+                    db, "Port", 1, 65535, "Database.Port"
+            );
+        } catch (IllegalStateException ex) {
+            throw fail("DB-CONFIG-002", ex.getMessage(), ex);
+        }
 
         if (!"mysql".equalsIgnoreCase(type)) {
-            throw new IllegalStateException("Unsupported Database.Type '" + type + "'. Only 'MySQL' is supported.");
+            throw fail("DB-CONFIG-003",
+                    "Unsupported Database.Type '" + type + "'. Only 'MySQL' is supported.");
         }
-        
+
         if (!"jdbc".equalsIgnoreCase(module)) {
-            throw new IllegalStateException("Unsupported Database.Module '" + module + "'. Expected 'jdbc'.");
+            throw fail("DB-CONFIG-004",
+                    "Unsupported Database.Module '" + module + "'. Expected 'jdbc'.");
         }
-        
+
         if (engine.trim().isEmpty()) {
-            throw new IllegalStateException("Database.Engine must not be empty.");
+            throw fail("DB-CONFIG-005", "Database.Engine must not be empty.");
         }
 
         // === SSL configuration ===
@@ -147,27 +181,8 @@ public final class Database {
                 enc, "UseUnicode", true, "Database.Encoding.UseUnicode"
         );
 
-        String charsetRaw = (enc != null ? enc.getString("Charset", "utf8mb4") : "utf8mb4");
-        if (charsetRaw == null) {
-            charsetRaw = "utf8mb4";
-        }
-        
-        // Bound the charset string itself: not empty, not a paragraph.
-        String charset = configManager.getRequiredStringBounded(
-                enc != null ? enc : db, // if Encoding section exists, tie error to it; else still validate
-                "Charset",
-                "Database.Encoding.Charset",
-                1,
-                32
-        );
-
-        if (!charset.equalsIgnoreCase("utf8mb4") && !charset.equalsIgnoreCase("utf8")) {
-            logger.warning(DB_PREFIX +
-                    "Database.Encoding.Charset is set to '" + charset + "'. " +
-                    "Non-UTF-8 encodings can cause issues with international characters or emojis " +
-                    "unless your entire database and plugin are configured for that encoding. " +
-                    "For most servers, 'utf8mb4' is recommended.");
-        }
+        // Resolves charset safely, maps utf8mb4 → UTF-8, validates, falls back if needed.
+        String charset = resolveCharset(db);
 
         // === Pool configuration ===
         ConfigurationSection pool = db.getConfigurationSection("Pool");
@@ -222,26 +237,33 @@ public final class Database {
                 "ValidationTimeoutMs out of range (%d ms). Clamped to %d ms."
         );
 
-        // === Build JDBC URL ===
-        StringBuilder url = new StringBuilder();
-        url.append("jdbc:mysql://")
-           .append(host).append(':').append(port)
-           .append('/').append(name)
-           .append("?useUnicode=").append(useUnicode)
-           .append("&characterEncoding=").append(charset)
-           .append("&allowPublicKeyRetrieval=").append(allowPublicKeyRetrieval);
+        // === Build full JDBC URL ===
+        StringBuilder urlQuery = new StringBuilder();
+        urlQuery
+                .append("?useUnicode=").append(useUnicode)
+                .append("&characterEncoding=").append(charset)
+                .append("&allowPublicKeyRetrieval=").append(allowPublicKeyRetrieval);
 
         if (useSSL) {
-            url.append("&useSSL=true")
-               .append("&requireSSL=true")
-               .append("&verifyServerCertificate=").append(verifyServerCert);
+            urlQuery
+                    .append("&useSSL=true")
+                    .append("&requireSSL=true")
+                    .append("&verifyServerCertificate=").append(verifyServerCert);
         } else {
-            url.append("&useSSL=false");
+            urlQuery.append("&useSSL=false");
         }
+
+        // Full MySQL URL
+        String jdbcUrl = new StringBuilder()
+                .append("jdbc:mysql://")
+                .append(host).append(':').append(port)
+                .append('/').append(name)
+                .append(urlQuery)
+                .toString();
 
         // === Hikari configuration ===
         HikariConfig cfg = new HikariConfig();
-        cfg.setJdbcUrl(url.toString());
+        cfg.setJdbcUrl(jdbcUrl);
         cfg.setUsername(user);
         cfg.setPassword(pass);
 
@@ -254,16 +276,22 @@ public final class Database {
 
         cfg.setConnectionTestQuery("SELECT 1");
 
-        dataSource = new HikariDataSource(cfg);
+        try {
+            dataSource = new HikariDataSource(cfg);
+        } catch (Exception ex) {
+            throw fail("DB-POOL-001",
+                    "Failed to create HikariCP pool. Check Database.* settings and JDBC driver.",
+                    ex);
+        }
+
         logger.info("HikariCP pool initialized for database '" + name + "' on " + host + ":" + port + ".");
 
         // Initial health check – fail early if DB is unreachable.
         if (!isAlive()) {
             shutdown();
-            throw new IllegalStateException(
-                    "Database pool created, but initial health check failed. " +
-                    "Check your Database.* settings in config.yml."
-            );
+            throw fail("DB-HEALTH-001",
+                    "Database pool created, but the initial health check failed. " +
+                    "Check host, port, credentials and database name.");
         }
 
         updateStatus(DatabaseStatus.UP);
@@ -484,6 +512,80 @@ public final class Database {
     }
 
     // ====================== Internal helpers ======================
+
+     /**
+      * Resolves the connection charset from configuration.
+      * <p>
+      * Rules:
+      * <ul>
+      *     <li>Empty or missing → "UTF-8".</li>
+      *     <li>"utf8mb4" or "utf8" (MySQL-style) → mapped to "UTF-8" with an info log.</li>
+      *     <li>Unsupported Java charset → warning and fallback to "UTF-8".</li>
+      * </ul>
+      *
+      * This method never throws; it always returns a valid Java charset name
+      * and logs what it had to do to get there.
+      *
+      * @param dbSection the {@code Database} configuration section
+      * @return a Java charset name safe to use in the JDBC URL
+      */
+     private String resolveCharset(ConfigurationSection dbSection) {
+         ConfigurationSection enc = dbSection.getConfigurationSection("Encoding");
+
+         String raw = (enc != null ? enc.getString("Charset", "UTF-8") : "UTF-8");
+         if (raw == null) {
+             raw = "UTF-8";
+         }
+         raw = raw.trim();
+
+         // Bound the length so nobody pastes nonsense paragraphs
+         raw = configManager.getRequiredStringBounded(
+                 enc != null ? enc : dbSection,
+                 "Charset",
+                 "Database.Encoding.Charset",
+                 1,
+                 32
+         );
+
+         String chosen;
+
+         // Common MySQL-style names → map to Java charset
+         if (raw.equalsIgnoreCase("utf8mb4") || raw.equalsIgnoreCase("utf8")) {
+             logger.info(DB_PREFIX +
+                     "Database.Encoding.Charset is set to '" + raw + "'. " +
+                     "Using Java charset 'UTF-8' for the connection. " +
+                     "Ensure your MySQL database uses 'utf8mb4' as charset/collation.");
+             chosen = "UTF-8";
+         } else {
+             chosen = raw;
+         }
+
+         // If Java doesn't support this, fall back to UTF-8 and warn
+         if (!Charset.isSupported(chosen)) {
+             logger.warning(DB_PREFIX +
+                     "Database.Encoding.Charset '" + chosen + "' is not supported by this Java runtime " +
+                     "(DB-ENCODING-001). Falling back to 'UTF-8'.");
+             chosen = "UTF-8";
+         }
+
+         // Optional: warn if they pick something exotic but valid
+         if (!chosen.equalsIgnoreCase("UTF-8")) {
+             logger.warning(DB_PREFIX +
+                     "Database.Encoding.Charset is '" + chosen + "'. " +
+                     "Non-UTF-8 encodings can cause issues with international characters or emojis " +
+                     "unless your entire setup uses the same encoding. For most servers, 'UTF-8' is recommended.");
+         }
+
+         return chosen;
+     }
+
+    private DatabaseInitException fail(String code, String message) {
+        return new DatabaseInitException(code, message);
+    }
+
+    private DatabaseInitException fail(String code, String message, Throwable cause) {
+        return new DatabaseInitException(code, message, cause);
+    }
 
     private void updateStatus(DatabaseStatus newStatus) {
         if (newStatus == status) {

@@ -58,26 +58,10 @@ public class Main extends JavaPlugin
         mainConfig = new ConfigManager(this, "config");
         mainConfig.setup();
 
-		database = new Database(this, mainConfig);
-
-        // Let DB notify modules when state changes:
-        database.setStateListener((oldStatus, newStatus) -> {
-            if (moduleManager != null) {
-                moduleManager.checkDatabaseState();
-            }
-            getLogger().info("Database state changed: " + oldStatus + " -> " + newStatus);
-        });
-
-        try {
-            database.init();
-        } catch (Exception ex) {
-            getLogger().severe("Failed to initialize database pool:");
-            ex.printStackTrace();
-            getServer().getPluginManager().disablePlugin(this);
-            return;
+        database = new Database(this, mainConfig);
+        if (!database.initializeAndStartWatchdog()) {
+            return; // database already logged and disabled the plugin
         }
-
-        database.startWatchdog();
 
 		languageManager = new SimpleLanguageManager(); 
 		profileManager = new ProfileManager();

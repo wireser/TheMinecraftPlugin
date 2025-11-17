@@ -1,12 +1,169 @@
-#Ddatabase connection
+# =============================================================================
+# Database configuration
+# =============================================================================
 Database:
-  Type: MySQL
-  Engine: InnoDB
-  Module: jdbc
-  Host: A
+  # ---------------------------------------------------------------------------
+  # Core connection settings
+  # ---------------------------------------------------------------------------
+
+  # Type of database backend.
+  # Expected: "MySQL" (case-insensitive).
+  # Default: none (REQUIRED) – the plugin will refuse to start if this is missing.
+  # Recommended: "MySQL"
+  # Warning: Other types are not supported yet.
+  Type: "MySQL"
+
+  # Storage engine. This is informational only but validated as non-empty.
+  # Default: none (REQUIRED).
+  # Recommended: "InnoDB" for modern MySQL/MariaDB.
+  Engine: "InnoDB"
+
+  # Access method. Currently this must be "jdbc".
+  # Default: none (REQUIRED).
+  # Recommended: "jdbc"
+  Module: "jdbc"
+
+  # Hostname or IP of the database server.
+  # Expected: string (hostname, IPv4, or IPv6).
+  # Default: none (REQUIRED).
+  # Example: "127.0.0.1" or "mysql.example.com"
+  Host: "127.0.0.1"
+
+  # Database server port.
+  # Expected: integer in range 1–65535.
+  # Default: no default; invalid values will stop the plugin.
+  # Recommended: 3306 (standard MySQL port).
   Port: 3306
-  Name: B
-  User: C
-  Pass: D
+
+  # Name of the database/schema to use.
+  # Expected: existing database name.
+  # Default: none (REQUIRED).
+  # Warning: the database must already exist; this plugin does not create it.
+  Name: "my_plugin_database"
+
+  # Username for connecting to the database.
+  # Expected: a user with permissions to read/write this schema.
+  # Default: none (REQUIRED).
+  # Recommended: create a dedicated user with limited permissions.
+  User: "my_plugin_user"
+
+  # Password for the database user.
+  # Expected: string (plain text).
+  # Default: none (REQUIRED).
+  # Recommended: At least 8 characters. At least 1 uppercase, 1 special character.
+  Pass: "my_super_secret_password"
+
+  # MySQL 8+ often requires this when using password-based authentication.
+  # Expected: boolean.
+  # Default: true.
+  # Warning: If you disable this and the server uses caching_sha2_password
+  #          without a TLS connection, authentication might fail.
   allowPublicKeyRetrieval: true
 
+  # ---------------------------------------------------------------------------
+  # SSL / TLS options
+  # ---------------------------------------------------------------------------
+  SSL:
+    # Whether to use SSL/TLS for the connection.
+    # Expected: boolean.
+    # Default: false.
+    # Recommended:
+    #   - true  on production servers with proper certificates
+    #   - false on local/dev environments
+    UseSSL: false
+
+    # Whether to verify the server SSL certificate.
+    # Expected: boolean.
+    # Default: false.
+    # Recommended:
+    #   - true  if you have a valid CA-signed certificate and hostname matches.
+    #   - false if you're using self-signed certs or don't care about strict validation.
+    VerifyServerCertificate: false
+
+  # ---------------------------------------------------------------------------
+  # Encoding / character set
+  # ---------------------------------------------------------------------------
+  Encoding:
+    # Whether to use Unicode mode.
+    # Expected: boolean.
+    # Default: true.
+    # Recommended: true (do not turn this off unless you know what you're doing).
+    UseUnicode: true
+
+    # Character set used by the connection.
+    # Expected: valid MySQL charset name.
+    # Default: "utf8mb4".
+    # Recommended: "utf8mb4" (full Unicode, including emojis).
+    # Warning: Changing this without matching the server/database charset can cause
+    #          strange character issues.
+    Charset: "utf8mb4"
+
+  # ---------------------------------------------------------------------------
+  # Connection pool (HikariCP)
+  # ---------------------------------------------------------------------------
+  Pool:
+    # Maximum number of connections in the pool.
+    # Expected: positive integer.
+    # Default: 10.
+    # Recommended:
+    #   - Small servers: 5–10
+    #   - Large servers: 10–20 (depends on DB server capacity)
+    MaxPoolSize: 10
+
+    # How long to wait for a connection from the pool before failing.
+    # Expected: positive integer (milliseconds).
+    # Default: 30000 (30 seconds).
+    # Warning: Very high values can make the server "hang" longer if the DB is stuck.
+    ConnectionTimeoutMs: 30000
+
+    # How long an idle connection can sit in the pool before being closed.
+    # Expected: positive integer (milliseconds).
+    # Default: 600000 (10 minutes).
+    # Recommended: Leave default unless you know your DB connection patterns.
+    IdleTimeoutMs: 600000
+
+    # Maximum lifetime of a connection in the pool.
+    # Expected: positive integer (milliseconds).
+    # Default: 1800000 (30 minutes).
+    # Recommended: Slightly less than the MySQL server's wait_timeout.
+    MaxLifetimeMs: 1800000
+
+    # How long to wait for a connection validation check.
+    # Expected: positive integer (milliseconds).
+    # Default: 2000 (2 seconds).
+    # Warning: Too high → slow health checks; too low → false negatives on laggy networks.
+    ValidationTimeoutMs: 2000
+
+  # ---------------------------------------------------------------------------
+  # Database watchdog
+  # ---------------------------------------------------------------------------
+  Watchdog:
+    # Enables or disables the periodic database health check.
+    # Expected: boolean.
+    # Default: true.
+    # Recommended: true for production servers.
+    Enabled: true
+
+    # How often to run the health check.
+    # Expected: positive integer (ticks).
+    # Default: 100 ticks.
+    # 20 ticks = 1 second, so 100 ticks ≈ 5 seconds.
+    # Recommended:
+    #   - 100–200 (5–10 seconds) for most servers.
+    CheckIntervalTicks: 100
+
+    # How many consecutive failed health checks are allowed before "fail-fast"
+    # behavior is triggered (if enabled).
+    # Expected: positive integer.
+    # Default: 12.
+    # Example: 12 failures * 5 seconds = ~60 seconds of downtime.
+    MaxConsecutiveFailures: 12
+
+    # If true, the plugin will disable itself when the database is considered
+    # permanently down (after MaxConsecutiveFailures).
+    # Expected: boolean.
+    # Default: true.
+    # Recommended:
+    #   - true  if the database is critical to plugin functionality.
+    #   - false if the plugin should keep running in a degraded mode.
+    FailFast: true
