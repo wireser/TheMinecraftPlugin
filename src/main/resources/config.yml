@@ -96,7 +96,7 @@ Database:
     # Recommended: "utf8mb4" (full Unicode, including emojis).
     # Warning: Changing this without matching the server/database charset can cause
     #          strange character issues.
-    Charset: "utf8mb4"
+    Charset: "UTF-8"
 
   # ---------------------------------------------------------------------------
   # Connection pool (HikariCP)
