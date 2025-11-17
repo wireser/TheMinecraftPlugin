@@ -96,6 +96,12 @@ public class Main extends JavaPlugin
 		
 	}
 	
+	@Override
+	public void onLoad() {
+	    java.util.logging.Logger hikari = java.util.logging.Logger.getLogger("com.zaxxer.hikari");
+	    hikari.setLevel(java.util.logging.Level.SEVERE);
+	}
+	
 	/**
 	 * Command routing entry point.
 	 * <p>
