@@ -433,12 +433,12 @@ public final class CommandCentral {
 	private void logCommandException(CommandRegistry cmd, CommandException e) {
 	    CommandExceptionType type = e.getType();
 	    Level level = switch (type.getSeverity()) {
-            case INFO -> Level.INFO;
-            case WARN -> Level.WARNING;
-            default -> Level.SEVERE;
-        };
+	        case INFO -> Level.INFO;
+	        case WARN -> Level.WARNING;
+	        default -> Level.SEVERE;
+	    };
 
-        instance.getLogger().log(
+	    instance.getLogger().log(
 	        level,
 	        String.format(
 	            "CommandException while executing '%s': %s",
