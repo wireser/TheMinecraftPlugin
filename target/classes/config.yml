@@ -1,0 +1,12 @@
+#Ddatabase connection
+Database:
+  Type: MySQL
+  Engine: InnoDB
+  Module: jdbc
+  Host: A
+  Port: 3306
+  Name: B
+  User: C
+  Pass: D
+  allowPublicKeyRetrieval: true
+
