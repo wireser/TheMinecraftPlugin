@@ -98,21 +98,8 @@ public class Main extends JavaPlugin
 	
 	@Override
 	public void onLoad() {
-	    // Silence every logger under your shaded Hikari package
 	    java.util.logging.Logger.getLogger("com.wireser.minecraft.shaded.hikari")
-	            .setLevel(java.util.logging.Level.SEVERE);
-
-	    java.util.logging.Logger.getLogger("com.wireser.minecraft.shaded.hikari.HikariDataSource")
-	            .setLevel(java.util.logging.Level.SEVERE);
-
-	    java.util.logging.Logger.getLogger("com.wireser.minecraft.shaded.hikari.pool.HikariPool")
-	            .setLevel(java.util.logging.Level.SEVERE);
-
-	    java.util.logging.Logger.getLogger("com.wireser.minecraft.shaded.hikari.pool.PoolBase")
-	            .setLevel(java.util.logging.Level.SEVERE);
-
-	    java.util.logging.Logger.getLogger("com.wireser.minecraft.shaded.hikari.pool.HikariPool")
-	            .setLevel(java.util.logging.Level.SEVERE);
+	            .setLevel(java.util.logging.Level.OFF);
 	}
 	
 	/**
