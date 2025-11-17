@@ -1,6 +1,7 @@
 listeners\inventory\InventoryClick.class
 lib\Discord$EmbedObject$Author.class
 listeners\player\PlayerTeleport.class
+database\DatabaseInitException.class
 command\CooldownManager.class
 listeners\hanging\HangingPlace.class
 listeners\PlayerVote.class
