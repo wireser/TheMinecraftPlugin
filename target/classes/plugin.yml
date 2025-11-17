@@ -5,7 +5,7 @@ author: wireser
 website: www.theminecraftplugin.com
 
 # SYSTEM
-version: ${project.version}
+version: 1.0.0
 main: main.Main
 load: POSTWORLD
 api-version: '1.21'
