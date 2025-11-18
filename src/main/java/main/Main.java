@@ -8,12 +8,14 @@ import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.config.Configurator;
 import command.CommandCentral;
 import database.Database;
+import database.DatabaseAccess;
 import managers.ConfigManager;
 import managers.LanguageManager;
 import managers.ModuleManager;
-import managers.ProfileManager;
 import managers.SimpleLanguageManager;
-import model.Profile;
+import playerdata.Profile;
+import playerdata.ProfileManager;
+import playerdata.ProfileStorage;
 
 /**
  * The main entry point of the plugin.
@@ -43,7 +45,12 @@ public class Main extends JavaPlugin
 	private SimpleLanguageManager languageManager;
 	
 	private ConfigManager mainConfig;
+	
+	private DatabaseAccess databaseAccess;
 
+	/** Storage helper for all profile-related persistence. */
+    private ProfileStorage profileStorage;
+    
     @Override
     public void onLoad() {
         muteHikariLoggers();
@@ -68,9 +75,13 @@ public class Main extends JavaPlugin
         if (!database.initializeAndStartWatchdog()) {
             return; // database already logged and disabled the plugin
         }
+        
+        databaseAccess = new DatabaseAccess(database);
 
-		languageManager = new SimpleLanguageManager(); 
-		profileManager = new ProfileManager();
+        ProfileStorage storage = new ProfileStorage(databaseAccess, this.getLogger());
+        profileManager = new ProfileManager(storage);
+        
+		languageManager = new SimpleLanguageManager();
 		moduleManager = new ModuleManager(this, database);
 		commandCentral = new CommandCentral(this, database, languageManager);
 		
@@ -117,26 +128,26 @@ public class Main extends JavaPlugin
 	@Override
 	public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
 
-		if (commandCentral == null) {
-			sender.sendMessage("Commands are not yet available.");
-			return true;
-		}
+	    if (commandCentral == null) {
+	        sender.sendMessage("Commands are not yet available.");
+	        return true;
+	    }
 
-		if (!(sender instanceof Player)) {
-			sender.sendMessage("This command can only be used by players.");
-			return true;
-		}
+	    if (!(sender instanceof Player player)) {
+	        sender.sendMessage("This command can only be used by players.");
+	        return true;
+	    }
 
-		Player player = (Player) sender;
-		Profile profile = profileManager.get(player.getUniqueId());
-		
-		if (profile == null) {
-			sender.sendMessage("Your profile is not loaded yet. Please try again in a moment.");
-			return true;
-		}
+	    Profile profile = profileManager.resolveOnline(player);
 
-		return commandCentral.execute(profile, cmd, label, args);
+	    if (profile == null) {
+	        sender.sendMessage("Your profile is not loaded yet. Please try again in a moment.");
+	        return true;
+	    }
+
+	    return commandCentral.execute(profile, cmd, label, args);
 	}
+
 
 	/**
 	 * @return the active plugin instance
@@ -158,6 +169,18 @@ public class Main extends JavaPlugin
 	 */
 	public Database getDatabase() {
 		return database;
+	}
+	
+	public DatabaseAccess db() {
+	    return databaseAccess;
+	}
+
+	/**
+	 * @return the shared {@link ProfileStorage} instance used for all
+	 *         profile-related database operations.
+	 */
+	public ProfileStorage getProfileStorage() {
+	    return profileStorage;
 	}
 
 	/**
