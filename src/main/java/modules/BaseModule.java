@@ -6,6 +6,7 @@ import org.bukkit.event.Listener;
 import command.CommandCentral;
 import main.Main;
 import managers.ConfigManager;
+import managers.LanguageManager;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -30,12 +31,16 @@ public abstract class BaseModule implements Listener {
     protected ConfigManager configManager;
     protected FileConfiguration config;
     
+    // Language
+    private final LanguageManager lang;
+    
     // Translatable texts
     protected Map<String, String> texts = new HashMap<>();
     
     public BaseModule(String moduleName, String moduleVersion) {
         this.moduleName = moduleName;
         this.moduleVersion = moduleVersion;
+        this.lang = Main.getInstance().getLanguageManager();
         this.enabled = false;
         this.defaultEnabled = true;
         this.description = "No description provided";

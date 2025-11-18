@@ -185,7 +185,7 @@ public final class CommandCentral {
 				: (bukkitCmd != null ? bukkitCmd.getName() : null);
 
 		if (usedLabel == null || usedLabel.isEmpty()) {
-		    String msg = language.getFormatted(
+		    String msg = language.getString(
 		        KEY_UNKNOWN_COMMAND,
 		        FMT_UNKNOWN_COMMAND,
 		        ""
@@ -196,7 +196,7 @@ public final class CommandCentral {
 
 		CommandRegistry cmd = getCommand(usedLabel).orElse(null);
 		if (cmd == null) {
-		    String msg = language.getFormatted(
+		    String msg = language.getString(
 		        KEY_UNKNOWN_COMMAND,
 		        FMT_UNKNOWN_COMMAND,
 		        usedLabel
@@ -207,7 +207,7 @@ public final class CommandCentral {
 
 		if (!isCommandVisible(player, cmd)) {
 		    // Intentionally pretend the command does not exist for this group
-		    String msg = language.getFormatted(
+		    String msg = language.getString(
 		        KEY_UNKNOWN_COMMAND,
 		        FMT_UNKNOWN_COMMAND,
 		        usedLabel
@@ -220,7 +220,7 @@ public final class CommandCentral {
 		if (!isModuleEnabled(cmd.getModuleName())) {
 			player.msg(
 				    NamedTextColor.RED,
-				    language.getFormatted(
+				    language.getString(
 				        KEY_MODULE_DISABLED,
 				        FMT_MODULE_DISABLED,
 				        usedLabel.toLowerCase(Locale.ROOT)
@@ -233,7 +233,7 @@ public final class CommandCentral {
 		if (!cmd.isEnabled()) {
 			player.msg(
 				    NamedTextColor.RED,
-				    language.getFormatted(
+				    language.getString(
 				        KEY_COMMAND_DISABLED,
 				        FMT_COMMAND_DISABLED,
 				        usedLabel.toLowerCase(Locale.ROOT)
@@ -244,7 +244,7 @@ public final class CommandCentral {
 
 		// Permission check
 		if (cmd.hasPermissionNode() && !player.hasPermission(cmd.getPermissionNode())) {
-			String noPerm = language.get(KEY_NO_PERMISSION, MSG_NO_PERMISSION);
+			String noPerm = language.getString(KEY_NO_PERMISSION, MSG_NO_PERMISSION);
 			player.msg(NamedTextColor.RED, noPerm);
 			return true;
 		}
@@ -257,7 +257,7 @@ public final class CommandCentral {
 
 		    player.msg(
 		        NamedTextColor.RED,
-		        language.getFormatted(
+		        language.getString(
 		            KEY_INSUFFICIENT_FUNDS,
 		            FMT_INSUFFICIENT_FUNDS,
 		            formatted,
@@ -272,7 +272,7 @@ public final class CommandCentral {
 			double remaining = cooldownManager.getRemaining(player.getUuid(), cmd);
 			player.msg(
 			    NamedTextColor.RED,
-			    language.getFormatted(
+			    language.getString(
 			        KEY_COOLDOWN_ACTIVE,
 			        FMT_COOLDOWN_ACTIVE,
 			        remaining
@@ -310,7 +310,7 @@ public final class CommandCentral {
 		        e
 		    );
 
-		    String msg = language.get(KEY_UNAVAILABLE, MSG_UNAVAILABLE);
+		    String msg = language.getString(KEY_UNAVAILABLE, MSG_UNAVAILABLE);
 		    player.msg(NamedTextColor.RED, msg);
 		    return true;
 		}
@@ -372,14 +372,6 @@ public final class CommandCentral {
 	    return cost;
 	}
 
-	/**
-	 * Checks if a player has sufficient funds for a command.
-	 *
-	 * @param player the profile to check
-	 * @param cmd    the command with associated cost
-	 * @return {@code true} if the player can afford the command (or no cost is defined),
-	 *         {@code false} otherwise
-	 */
 	/**
 	 * Checks if a player has sufficient funds for a command.
 	 *
@@ -492,7 +484,7 @@ public final class CommandCentral {
 	    switch (type) {
 	        case SYNTAX_ERROR: {
 	            // "Error: <message>"
-	            String errorPrefix = language.getFormatted(
+	            String errorPrefix = language.getString(
 	                KEY_COMMAND_ERROR,
 	                FMT_COMMAND_ERROR,
 	                e.getMessage()
@@ -501,7 +493,7 @@ public final class CommandCentral {
 
 	            // Optional usage line
 	            if (cmd.getSyntax() != null && !cmd.getSyntax().isEmpty()) {
-	                String usage = language.getFormatted(
+	                String usage = language.getString(
 	                    KEY_SYNTAX_USAGE,
 	                    FMT_SYNTAX_USAGE,
 	                    cmd.getSyntax()
@@ -512,26 +504,26 @@ public final class CommandCentral {
 	        }
 
 	        case PERMISSION_ERROR: {
-	            String noPerm = language.get(KEY_NO_PERMISSION, MSG_NO_PERMISSION);
+	            String noPerm = language.getString(KEY_NO_PERMISSION, MSG_NO_PERMISSION);
 	            player.msg(NamedTextColor.RED, noPerm);
 	            break;
 	        }
 
 	        case SUBCOMMAND_PERMISSION: {
-	            String noSubPerm = language.get(KEY_NO_SUB_PERMISSION, MSG_NO_SUB_PERMISSION);
+	            String noSubPerm = language.getString(KEY_NO_SUB_PERMISSION, MSG_NO_SUB_PERMISSION);
 	            player.msg(NamedTextColor.RED, noSubPerm);
 	            break;
 	        }
 
 	        case UNAVAILABLE_ERROR: {
-	            String unavailable = language.get(KEY_UNAVAILABLE, MSG_UNAVAILABLE);
+	            String unavailable = language.getString(KEY_UNAVAILABLE, MSG_UNAVAILABLE);
 	            player.msg(NamedTextColor.RED, unavailable);
 	            break;
 	        }
 
 	        case GENERAL_ERROR:
 	        default: {
-	            String msg = language.getFormatted(
+	            String msg = language.getString(
 	                KEY_COMMAND_ERROR,
 	                FMT_COMMAND_ERROR,
 	                e.getMessage()
