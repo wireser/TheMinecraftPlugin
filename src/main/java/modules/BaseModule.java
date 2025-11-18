@@ -1,287 +1,563 @@
 package modules;
 
-import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.event.Listener;
-
 import command.CommandCentral;
+import command.CommandRegistry;
 import main.Main;
 import managers.ConfigManager;
 import managers.LanguageManager;
+import net.kyori.adventure.text.Component;
+import org.bukkit.Server;
+import org.bukkit.World;
+import org.bukkit.command.ConsoleCommandSender;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.entity.Player;
+import org.bukkit.event.Listener;
+import org.bukkit.plugin.PluginManager;
+import org.bukkit.plugin.java.JavaPlugin;
+import playerdata.Profile;
+import playerdata.ProfileManager;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
+import java.net.URL;
+import java.util.*;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.logging.Logger;
 
+/**
+ * Common base for all modules.
+ *
+ * Handles:
+ * - module config + language loading
+ * - auto registration/unregistration of commands
+ * - dynamic listener registration from modules.<name>.listeners
+ * - convenience accessors for DB, profiles, server, logging, etc.
+ */
 public abstract class BaseModule implements Listener {
-    // Module metadata
+
+    // Core wiring
+    protected final Main plugin;
     protected final String moduleName;
-    protected final String moduleVersion;
-    private String description;
-    
-    // Module state
-    protected boolean enabled;
-    private boolean defaultEnabled;
-    
-    // Dependencies
-    private String[] requiredPlugins = new String[0];
-    private String[] requiredModules = new String[0];
-    private boolean requiresDatabase = false;
-    
-    // Configuration
+
+    // Config + language
     protected ConfigManager configManager;
     protected FileConfiguration config;
-    
-    // Language
-    private final LanguageManager lang;
-    
-    // Translatable texts
-    protected Map<String, String> texts = new HashMap<>();
-    
-    public BaseModule(String moduleName, String moduleVersion) {
+    protected final LanguageManager lang;
+
+    // Metadata
+    protected String moduleVersion;
+    protected String description = "No description provided";
+    protected boolean enabled = false;
+
+    // Dependencies (configured via YAML, not hard-coded)
+    protected List<String> requiredPlugins = new ArrayList<>();
+    protected List<String> requiredModules = new ArrayList<>();
+
+    // Commands owned by this module
+    private final List<CommandRegistry> registeredCommands = new ArrayList<>();
+
+    protected BaseModule(String moduleName, String defaultVersion) {
+        this.plugin = Main.getInstance();
         this.moduleName = moduleName;
-        this.moduleVersion = moduleVersion;
-        this.lang = Main.getInstance().getLanguageManager();
-        this.enabled = false;
-        this.defaultEnabled = true;
-        this.description = "No description provided";
+        this.moduleVersion = defaultVersion;
+        this.lang = plugin.getLanguageManager(); // global LanguageManager (per-module files are handled by it)
     }
-    
+
+    // =====================================================================
+    // LIFECYCLE
+    // =====================================================================
+
     /**
-     * Called when the module is loaded (before enabling)
+     * Called once when the module is constructed and the plugin is starting.
+     * Sets up config and reads metadata.
      */
-    public void load() {
-        // 1. Setup configuration
-        configManager = new ConfigManager(Main.getInstance(), "modules/" + moduleName.toLowerCase());
-        configManager.setup();
-        config = configManager.getConfig();
-        
-        // 2. Set default configuration values
-        config.addDefault("module.version", moduleVersion);
-        config.addDefault("module.enabled", defaultEnabled);
-        config.addDefault("module.description", description);
-        config.addDefault("module.requiresDatabase", requiresDatabase);
-        config.addDefault("module.requiredPlugins", requiredPlugins);
-        config.addDefault("module.requiredModules", requiredModules);
-        
-        // Add default texts
-        config.addDefault("texts.module-disabled", "Error: The module containing the %s command has been disabled.");
-        config.addDefault("texts.command-disabled", "Error: The %s command is currently disabled.");
-        // Add other default texts
-        
-        config.options().copyDefaults(true);
-        configManager.saveConfig();
-        
-        // 3. Load actual values from config (with fallback to defaults)
-        loadFromConfig();
-        
-        // 4. Register events if needed
-        Main.getInstance().getServer().getPluginManager().registerEvents(this, Main.getInstance());
+    public final void load() {
+        // Config is always: <dataFolder>/modules/<modulename>/config.yml
+        this.configManager = new ConfigManager(plugin, "modules/" + moduleName.toLowerCase(Locale.ROOT) + "/config");
+        this.configManager.setup();
+        this.config = configManager.getConfig();
+
+        loadMetaFromConfig();
+        onLoad();
     }
-    
+
     /**
-     * Loads values from configuration with fallbacks
+     * Reads module meta from YAML.
+     *
+     * Expected structure:
+     *
+     * meta:
+     *   name: "EmptyModule"
+     *   description: "..."
+     *   version: "1.0.0"
+     *   enabled: true
+     *   required_plugins: []
+     *   required_modules: []
      */
-    protected void loadFromConfig() {
-        // Load module settings
-        enabled = config.getBoolean("module.enabled", defaultEnabled);
-        description = config.getString("module.description", description);
-        requiresDatabase = config.getBoolean("module.requiresDatabase", requiresDatabase);
-        requiredPlugins = config.getStringList("module.requiredPlugins").toArray(new String[0]);
-        requiredModules = config.getStringList("module.requiredModules").toArray(new String[0]);
-        
-        // Load texts
-        loadTexts();
-    }
-    
-    /**
-     * Loads translatable texts from configuration
-     */
-    protected void loadTexts() {
-        texts.clear();
-        if (config.contains("texts")) {
-            for (String key : config.getConfigurationSection("texts").getKeys(false)) {
-                texts.put(key, config.getString("texts." + key));
-            }
+    protected void loadMetaFromConfig() {
+        // Basic defaults if meta section missing
+        if (!config.isConfigurationSection("meta")) {
+            config.createSection("meta");
         }
+
+        this.moduleVersion = config.getString("meta.version", this.moduleVersion);
+        this.description   = config.getString("meta.description", description);
+        boolean defaultEnabled = config.getBoolean("meta.enabled", true);
+
+        List<String> plugins = config.getStringList("meta.required_plugins");
+        List<String> modules = config.getStringList("meta.required_modules");
+
+        this.requiredPlugins = new ArrayList<>(plugins);
+        this.requiredModules = new ArrayList<>(modules);
+
+        // Persist defaults if not present
+        config.set("meta.version", moduleVersion);
+        config.set("meta.description", description);
+        config.set("meta.enabled", defaultEnabled);
+        config.set("meta.required_plugins", requiredPlugins);
+        config.set("meta.required_modules", requiredModules);
+        saveConfig();
+
+        this.enabled = defaultEnabled;
     }
-    
+
     /**
-     * Called when the module is enabled
+     * Plugin is enabling this module.
      */
-    public void enable() {
-        // 1. Check dependencies
-        if (!checkDependencies()) {
-            log("Disabled due to missing dependencies");
+    public final void enable() {
+        if (!enabled) {
+            log("Not enabled in config, skipping.");
             return;
         }
-        
-        // 2. Check database dependency
-        if (requiresDatabase && !Main.getInstance().getDatabase().isAlive()) {
-            log("Database unavailable - disabling module");
+
+        if (!checkDependencies()) {
+            log("Disabled due to missing dependencies.");
             enabled = false;
             return;
         }
-        
-        // 3. Register commands
-        registerCommands(Main.getInstance().getCommandCentral());
-        
-        // 4. Additional enable logic
+
+        // Let module define commands (BaseModule will register them)
+        registerCommands();
+
+        // Register all commands with CommandCentral
+        CommandCentral central = plugin.getCommandCentral();
+        for (CommandRegistry cmd : registeredCommands) {
+            central.register(cmd);
+        }
+
+        // Register listeners from modules.<modulename>.listeners.*
+        registerListenersDynamically();
+
         onEnable();
-        
-        enabled = true;
         log("Enabled v" + moduleVersion);
     }
-    
+
     /**
-     * Called when the module is disabled
+     * Plugin is disabling this module.
      */
-    public void disable() {
-        // 1. Unregister commands
-        unregisterCommands(Main.getInstance().getCommandCentral());
-        
-        // 2. Additional disable logic
+    public final void disable() {
+        if (!enabled) {
+            return;
+        }
+
+        // Unregister commands
+        CommandCentral central = plugin.getCommandCentral();
+        for (CommandRegistry cmd : registeredCommands) {
+            central.unregister(cmd.getLabel());
+        }
+        registeredCommands.clear();
+
         onDisable();
-        
         enabled = false;
-        log("Disabled");
+        log("Disabled.");
     }
-    
+
     /**
-     * Reloads module configuration
+     * Reload config + language and call module hook.
      */
-    public void reload() {
+    public final void reload() {
         configManager.reloadConfig();
-        config = configManager.getConfig();
-        loadFromConfig();
+        this.config = configManager.getConfig();
+        loadMetaFromConfig(); // re-read meta
         onReload();
-        log("Configuration reloaded");
+        log("Configuration reloaded.");
     }
-    
+
     /**
-     * Performs complete shutdown of the module.
-     * This should release all resources and perform final cleanup.
+     * Called on plugin shutdown for final cleanup.
      */
-    public void shutdown() {
-        // Close any open resources
-        // Cancel any remaining tasks
-        // Release file locks
-        log("Shut down complete");
+    public final void shutdown() {
+        onShutdown();
+        log("Shut down complete.");
     }
-    
+
+    // =====================================================================
+    // HOOKS FOR MODULES
+    // =====================================================================
+
     /**
-     * Register all module commands
+     * Called once after config has been loaded in {@link #load()}.
      */
-    protected abstract void registerCommands(CommandCentral central);
-    
+    protected void onLoad() {
+        // Optional override
+    }
+
     /**
-     * Unregister all module commands
+     * Called when the module is enabled and dependencies are satisfied.
      */
-    protected abstract void unregisterCommands(CommandCentral central);
-    
+    protected void onEnable() {
+        // Optional override
+    }
+
     /**
-     * Custom enable logic (override if needed)
+     * Called when the module is disabled.
      */
-    protected void onEnable() {}
-    
+    protected void onDisable() {
+        // Optional override
+    }
+
     /**
-     * Custom disable logic (override if needed)
+     * Called after config reload.
      */
-    protected void onDisable() {}
-    
+    protected void onReload() {
+        // Optional override
+    }
+
     /**
-     * Custom reload logic (override if needed)
+     * Called on plugin shutdown.
      */
-    protected void onReload() {}
-    
+    protected void onShutdown() {
+        // Optional override
+    }
+
     /**
-     * Check if all dependencies are available
+     * Module-level /meta command entry point (if you bind a command to call this).
+     * Return true if you handled the command.
+     */
+    public boolean onCommand(Profile sender, String label, String[] args) {
+        // Optional override by modules
+        return false;
+    }
+
+    /**
+     * Module must create its commands here using {@link #addCommand(CommandRegistry)}.
+     * BaseModule handles registration with CommandCentral.
+     */
+    protected abstract void registerCommands();
+
+    /**
+     * Add a command definition owned by this module.
+     */
+    protected final void addCommand(CommandRegistry command) {
+        if (command == null) return;
+        registeredCommands.add(command);
+    }
+
+    // =====================================================================
+    // DEPENDENCY CHECKING
+    // =====================================================================
+
+    /**
+     * Checks Bukkit plugin + module dependencies.
      */
     public boolean checkDependencies() {
-        // Check required plugins
-        for (String plugin : requiredPlugins) {
-            if (Main.getInstance().getServer().getPluginManager().getPlugin(plugin) == null) {
+        // External plugins
+        for (String pluginName : requiredPlugins) {
+            if (pluginName == null || pluginName.isEmpty()) continue;
+
+            org.bukkit.plugin.Plugin p = plugin.getServer().getPluginManager().getPlugin(pluginName);
+            if (p == null || !p.isEnabled()) {
+                log("Missing or disabled required plugin: " + pluginName);
                 return false;
             }
         }
-        
-        // Check required modules
-        for (String module : requiredModules) {
-            if (!Main.getInstance().getModuleManager().isModuleEnabled(module)) {
+
+        // Other modules
+        for (String moduleId : requiredModules) {
+            if (moduleId == null || moduleId.isEmpty()) continue;
+
+            BaseModule m = plugin.getModuleManager().getModule(moduleId);
+            if (m == null || !m.isEnabled()) {
+                log("Missing or disabled required module: " + moduleId);
                 return false;
             }
         }
-        
+
         return true;
     }
-    
+
+    // =====================================================================
+    // LISTENER REGISTRATION
+    // =====================================================================
+
     /**
-     * Logs a message to console
+     * Scans the JAR for classes under modules.<moduleName>.listeners and registers all
+     * that implement {@link Listener}.
+     *
+     * Supported constructors in listener classes:
+     * - (BaseModule)
+     * - (Main)
+     * - no-arg
      */
+    private void registerListenersDynamically() {
+        String pkg = "modules." + moduleName.toLowerCase(Locale.ROOT) + ".listeners";
+        String path = pkg.replace('.', '/');
+
+        try {
+            ClassLoader cl = plugin.getClass().getClassLoader();
+            Enumeration<URL> resources = cl.getResources(path);
+            if (!resources.hasMoreElements()) {
+                return; // no listeners package
+            }
+
+            PluginManager pm = plugin.getServer().getPluginManager();
+            Set<String> classNames = new HashSet<>();
+
+            while (resources.hasMoreElements()) {
+                URL url = resources.nextElement();
+                String urlStr = url.toString();
+
+                if (urlStr.startsWith("jar:file:")) {
+                    String jarPath = urlStr.substring("jar:file:".length(), urlStr.indexOf("!"));
+                    try (JarFile jar = new JarFile(jarPath)) {
+                        Enumeration<JarEntry> entries = jar.entries();
+                        while (entries.hasMoreElements()) {
+                            JarEntry entry = entries.nextElement();
+                            String name = entry.getName();
+                            if (name.startsWith(path) && name.endsWith(".class") && !entry.isDirectory()) {
+                                String className = name.replace('/', '.').substring(0, name.length() - 6);
+                                classNames.add(className);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (String className : classNames) {
+                try {
+                    Class<?> clazz = Class.forName(className, true, plugin.getClass().getClassLoader());
+                    if (!Listener.class.isAssignableFrom(clazz)) {
+                        continue;
+                    }
+
+                    Listener listener = instantiateListener(clazz);
+                    if (listener != null) {
+                        pm.registerEvents(listener, plugin);
+                        log("Registered listener: " + className);
+                    }
+                } catch (ClassNotFoundException ignored) {
+                    // Skip invalid classes
+                }
+            }
+
+        } catch (Exception e) {
+            log("Failed to scan/register listeners for package: " + path + " (" + e.getMessage() + ")");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Listener instantiateListener(Class<?> clazz) {
+        try {
+            // Try (BaseModule)
+            try {
+                return (Listener) clazz.getConstructor(BaseModule.class).newInstance(this);
+            } catch (NoSuchMethodException ignored) {}
+
+            // Try (Main)
+            try {
+                return (Listener) clazz.getConstructor(Main.class).newInstance(plugin);
+            } catch (NoSuchMethodException ignored) {}
+
+            // Try no-arg
+            return (Listener) clazz.getConstructor().newInstance();
+
+        } catch (Exception e) {
+            log("Failed to instantiate listener " + clazz.getName() + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    // =====================================================================
+    // CONVENIENCE GETTERS (what you asked for)
+    // =====================================================================
+
+    // --- Database ---
+
+    /**
+     * Database access helper (wrapper, not raw Hikari / Connection).
+     */
+    public database.DatabaseAccess getDB() {
+        return plugin.getDatabaseAccess();
+    }
+
+    // --- Profile / player access ---
+
+    private ProfileManager profiles() {
+        return plugin.getProfileManager();
+    }
+
+    public Profile getPlayer(Player bukkit) {
+        if (bukkit == null) return null;
+        Profile p = profiles().resolveByUuid(bukkit.getUniqueId());
+        if (p != null && p.getPlayer() != null) {
+            return p;
+        }
+        return null;
+    }
+
+    public Profile getPlayer(UUID uuid) {
+        if (uuid == null) return null;
+        Profile p = profiles().resolveByUuid(uuid);
+        if (p != null && p.getPlayer() != null) {
+            return p;
+        }
+        return null;
+    }
+
+    public Profile getPlayer(String ign) {
+        if (ign == null || ign.isEmpty()) return null;
+        Player online = plugin.getServer().getPlayerExact(ign);
+        if (online == null) return null;
+        return getPlayer(online);
+    }
+
+    public Profile getPlayer(int id) {
+        if (id <= 0) return null;
+        Profile p = profiles().resolveById(id);
+        if (p != null && p.getPlayer() != null) {
+            return p;
+        }
+        return null;
+    }
+
+    /**
+     * Offline lookup: returns a profile even if the player is not online,
+     * or {@code null} if they do not exist in the database.
+     */
+    public Profile getOfflinePlayer(UUID uuid) {
+        if (uuid == null) return null;
+        return profiles().resolveByUuid(uuid);
+    }
+
+    public Profile getOfflinePlayer(int id) {
+        if (id <= 0) return null;
+        return profiles().resolveById(id);
+    }
+
+    /**
+     * Name-based offline lookup. Uses Bukkit offline player cache + ProfileManager.
+     */
+    public Profile getOfflinePlayer(String ign) {
+        if (ign == null || ign.isEmpty()) return null;
+        // Prefer online
+        Profile online = getPlayer(ign);
+        if (online != null) return online;
+
+        // Fallback: offline by name via Bukkit -> UUID -> ProfileManager
+        java.util.UUID uuid = null;
+        try {
+            // 1.20+ has getOfflinePlayerIfCached; fall back to legacy if needed
+            org.bukkit.OfflinePlayer off = plugin.getServer().getOfflinePlayer(ign);
+            if (off != null && off.hasPlayedBefore()) {
+                uuid = off.getUniqueId();
+            }
+        } catch (Throwable ignored) {}
+
+        if (uuid == null) return null;
+        return profiles().resolveByUuid(uuid);
+    }
+
+    // --- Config / language ---
+
+    public FileConfiguration getConfig() {
+        return config;
+    }
+
+    /**
+     * Text from language manager (component).
+     */
+    public Component getText(String key) {
+        return lang.get(key);
+    }
+
+    /**
+     * Text with positional placeholders (%1, %2, ...).
+     */
+    public Component getText(String key, Object... args) {
+        return lang.get(key, args);
+    }
+
+    // --- Console / server / world / logger ---
+
+    public ConsoleCommandSender getConsole() {
+        return plugin.getServer().getConsoleSender();
+    }
+
+    public Server getServer() {
+        return plugin.getServer();
+    }
+
+    public World getWorld(String worldName) {
+        if (worldName == null || worldName.isEmpty()) return null;
+        return plugin.getServer().getWorld(worldName);
+    }
+
+    public Logger getLogger() {
+        return plugin.getLogger();
+    }
+
+    public JavaPlugin getPlugin() {
+        return plugin;
+    }
+
+    // --- Other modules ---
+
+    /**
+     * Get another module by name. Version check is up to the caller.
+     */
+    public BaseModule getModule(String name) {
+        if (name == null || name.isEmpty()) return null;
+        return plugin.getModuleManager().getModule(name);
+    }
+
+    /**
+     * Get another module, returning null if version does not match exactly.
+     */
+    public BaseModule getModule(String name, String version) {
+        BaseModule other = getModule(name);
+        if (other == null) return null;
+        if (version == null || version.isEmpty()) return other;
+        if (version.equalsIgnoreCase(other.getModuleVersion())) {
+            return other;
+        }
+        return null;
+    }
+
+    // =====================================================================
+    // MISC
+    // =====================================================================
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public String getModuleName() {
+        return moduleName;
+    }
+
+    public String getModuleVersion() {
+        return moduleVersion;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void saveConfig() {
+        configManager.saveConfig();
+    }
+
     public void log(String message) {
-        Main.getInstance().getLogger().info("[" + moduleName + "] " + message);
+        getLogger().info("[" + moduleName + "] " + message);
     }
-    
-    /**
-     * Logs a message to database
-     */
-    public void logToDatabase(String message) {
-        if (Main.getInstance().getDatabase().isAlive()) {
-            //Database.insert("log_modules", "module, message", "'" + moduleName + "','" + message + "'");
-        } else {
-            log("(DB offline) " + message);
-        }
-    }
-    
-    /**
-     * Gets a translated text with placeholders
-     */
-    public String getText(String key, Object... args) {
-        String text = texts.getOrDefault(key, key);
-        for (int i = 0; i < args.length; i++) {
-            text = text.replace("{" + i + "}", args[i].toString());
-        }
-        return text;
-    }
-    
-    // Getters and setters
-    public boolean isEnabled() { return enabled; }
-    public String getModuleName() { return moduleName; }
-    public String getModuleVersion() { return moduleVersion; }
-    public String getDescription() { return description; }
-    public FileConfiguration getConfig() { return config; }
-    public boolean requiresDatabase() { return requiresDatabase; }
-    
-    public void setDescription(String description) { 
-        this.description = description;
-        config.set("module.description", description);
-        saveConfig();
-    }
-    
-    public void setDefaultEnabled(boolean defaultEnabled) { 
-        this.defaultEnabled = defaultEnabled;
-        config.set("module.enabled", defaultEnabled);
-        saveConfig();
-    }
-    
-    public void setRequiredPlugins(String... plugins) { 
-        this.requiredPlugins = plugins; 
-        config.set("module.requiredPlugins", Arrays.asList(plugins));
-        saveConfig();
-    }
-    
-    public void setRequiredModules(String... modules) { 
-        this.requiredModules = modules; 
-        config.set("module.requiredModules", Arrays.asList(modules));
-        saveConfig();
-    }
-    
-    public void setRequiresDatabase(boolean requires) {
-        this.requiresDatabase = requires;
-        config.set("module.requiresDatabase", requires);
-        saveConfig();
-    }
-    
-    public void saveConfig() { 
-        configManager.saveConfig(); 
-    }
+
 }

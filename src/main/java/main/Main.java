@@ -82,7 +82,7 @@ public class Main extends JavaPlugin
         profileManager = new ProfileManager(storage);
         
 		languageManager = new YamlLanguageManager(getLogger());
-		moduleManager = new ModuleManager(this, database);
+		moduleManager = new ModuleManager(database);
 		commandCentral = new CommandCentral(this, database, languageManager);
 		
 		registerModules();
@@ -225,5 +225,9 @@ public class Main extends JavaPlugin
             getLogger().warning("Could not adjust Hikari logger levels via Log4j2. This only affects cosmetic startup logs.");
         }
     }
+
+	public DatabaseAccess getDatabaseAccess() {
+		return databaseAccess;
+	}
 	
 }
