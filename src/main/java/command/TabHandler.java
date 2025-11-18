@@ -2,7 +2,7 @@ package command;
 
 import java.util.List;
 
-import model.Profile;
+import playerdata.Profile;
 
 @FunctionalInterface
 public interface TabHandler {

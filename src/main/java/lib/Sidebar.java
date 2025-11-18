@@ -10,9 +10,9 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
+import playerdata.Profile;
 import utils.Strings;
 import main.Main;
-import model.Profile;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -126,7 +126,7 @@ public class Sidebar {
 		if(Main.getInstance() == null || Main.getInstance().getServer().getScoreboardManager() == null)
 			return;
 		
-		Player player = playerProfile.player;
+		Player player = playerProfile.getPlayer();
 		
 		if(player == null || !player.isOnline())
 			return;
@@ -142,7 +142,7 @@ public class Sidebar {
 			}
 			
 			Scoreboard playerScoreboard = player.getScoreboard();
-			String objectiveName = SIDEBAR_OBJECTIVE_PREFIX + playerProfile.ign;
+			String objectiveName = SIDEBAR_OBJECTIVE_PREFIX + playerProfile.getIgn();
 			
 			// Get or create the sidebar objective using non-deprecated methods
 			Objective sidebarObjective = playerScoreboard.getObjective(objectiveName);
@@ -291,7 +291,7 @@ public class Sidebar {
 	 */
 	private static void logErrorSilently(String message, Profile playerProfile) {
 		
-		String playerName = playerProfile != null ? playerProfile.ign : "unknown";
+		String playerName = playerProfile != null ? playerProfile.getIgn() : "unknown";
 		
 		// Only log the first occurrence to prevent spam
 		Main.getInstance().getLogger().log(Level.WARNING, "Sidebar error for {0}: {1}", new Object[]{playerName, message});
@@ -391,7 +391,7 @@ public class Sidebar {
 		List<Profile> onlineProfiles = new ArrayList<>();
 		
 		for(Profile profile : profiles)
-			if(profile != null && profile.player != null && profile.player.isOnline())
+			if(profile != null && profile.getPlayer() != null && profile.getPlayer().isOnline())
 				onlineProfiles.add(profile);
 		
 		// Process all online players
@@ -409,13 +409,13 @@ public class Sidebar {
 	 */
 	public static void cleanupPlayerScoreboard(Profile playerProfile) {
 		
-		if(playerProfile.player == null || !playerProfile.player.isOnline())
+		if(playerProfile.getPlayer() == null || !playerProfile.getPlayer().isOnline())
 			return;
 		
 		try {
 			
-			Scoreboard scoreboard = playerProfile.player.getScoreboard();
-			Objective oldObjective = scoreboard.getObjective(SIDEBAR_OBJECTIVE_PREFIX + playerProfile.name);
+			Scoreboard scoreboard = playerProfile.getPlayer().getScoreboard();
+			Objective oldObjective = scoreboard.getObjective(SIDEBAR_OBJECTIVE_PREFIX + playerProfile.getIgn());
 			
 			if(oldObjective != null)
 				oldObjective.unregister();

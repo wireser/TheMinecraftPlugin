@@ -1,6 +1,6 @@
 package command;
 
-import model.Profile;
+import playerdata.Profile;
 
 /**
  * Functional interface for command execution logic.
