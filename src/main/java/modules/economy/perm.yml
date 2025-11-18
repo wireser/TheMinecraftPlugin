@@ -1,0 +1,16 @@
+permissions:
+  tmp.economy.balance:
+    description: "Use /balance to view your own balance."
+    default: true
+
+  tmp.economy.balance.other:
+    description: "Use /balance <player> to view other players' balances."
+    default: op
+
+  tmp.economy.pay:
+    description: "Use /pay to send money to other players."
+    default: true
+
+  tmp.economy.admin:
+    description: "Use /eco to manage player balances (set/add/take)."
+    default: op

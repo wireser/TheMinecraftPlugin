@@ -1,0 +1,17 @@
+economy.balance.self: "&eYour balance: &6%1 &e%2"
+economy.balance.other: "&e%1's balance: &6%2 &e%3"
+economy.no_permission_other: "&cYou don't have permission to view other players' balances."
+economy.player_not_found: "&cPlayer '&f%1&c' not found."
+
+economy.pay.usage: "&cUsage: /pay <player> <amount>"
+economy.pay.invalid_amount: "&cInvalid amount: &f%1"
+economy.pay.out_of_range: "&cAmount must be between &f%1 &cand &f%2"
+economy.pay.self: "&cYou can't pay yourself."
+economy.pay.insufficient: "&cYou don't have enough money."
+economy.pay.success.sender: "&aYou sent &6%1 &a%2 to &e%3&a."
+economy.pay.success.receiver: "&aYou received &6%1 &a%2 from &e%3&a."
+
+economy.eco.usage: "&cUsage: /eco <set|add|take> <player> <amount>"
+economy.eco.set: "&eSet &6%1&e's balance to &6%2&e."
+economy.eco.add: "&eAdded &6%1 &eto &6%2&e's balance (new: &6%3&e)."
+economy.eco.take: "&eRemoved &6%1 &efrom &6%2&e's balance (new: &6%3&e)."
