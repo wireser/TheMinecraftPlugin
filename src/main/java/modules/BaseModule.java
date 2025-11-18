@@ -51,6 +51,12 @@ public abstract class BaseModule implements Listener {
     // Dependencies (configured via YAML, not hard-coded)
     protected List<String> requiredPlugins = new ArrayList<>();
     protected List<String> requiredModules = new ArrayList<>();
+    
+    /**
+     * Modules that should be loaded/enabled AFTER this one.
+     * Used by ModuleManager for dependency-aware ordering.
+     */
+    private java.util.List<String> preloadBefore = new java.util.ArrayList<>();
 
     // Commands owned by this module
     private final List<CommandRegistry> registeredCommands = new ArrayList<>();
@@ -94,30 +100,43 @@ public abstract class BaseModule implements Listener {
      *   required_modules: []
      */
     protected void loadMetaFromConfig() {
-        // Basic defaults if meta section missing
+        // Ensure meta section exists
         if (!config.isConfigurationSection("meta")) {
             config.createSection("meta");
         }
 
-        this.moduleVersion = config.getString("meta.version", this.moduleVersion);
-        this.description   = config.getString("meta.description", description);
-        boolean defaultEnabled = config.getBoolean("meta.enabled", true);
+        // Read values (with sane defaults)
+        String cfgVersion   = config.getString("meta.version", this.moduleVersion);
+        String cfgDesc      = config.getString("meta.description", this.description);
+        boolean cfgEnabled  = config.getBoolean("meta.enabled", true);
 
         List<String> plugins = config.getStringList("meta.required_plugins");
         List<String> modules = config.getStringList("meta.required_modules");
+        List<String> preload = config.getStringList("meta.preload_before");
 
-        this.requiredPlugins = new ArrayList<>(plugins);
-        this.requiredModules = new ArrayList<>(modules);
+        // Apply to fields
+        this.moduleVersion = cfgVersion;
+        this.description   = cfgDesc;
+        this.enabled       = cfgEnabled;
 
-        // Persist defaults if not present
-        config.set("meta.version", moduleVersion);
-        config.set("meta.description", description);
-        config.set("meta.enabled", defaultEnabled);
-        config.set("meta.required_plugins", requiredPlugins);
-        config.set("meta.required_modules", requiredModules);
+        requiredPlugins.clear();
+        requiredPlugins.addAll(plugins);
+
+        requiredModules.clear();
+        requiredModules.addAll(modules);
+
+        preloadBefore.clear();
+        preloadBefore.addAll(preload);
+
+        // Persist back (so defaults get written if missing)
+        config.set("meta.version",         this.moduleVersion);
+        config.set("meta.description",     this.description);
+        config.set("meta.enabled",         this.enabled);
+        config.set("meta.required_plugins", new ArrayList<>(requiredPlugins));
+        config.set("meta.required_modules", new ArrayList<>(requiredModules));
+        config.set("meta.preload_before",   new ArrayList<>(preloadBefore));
+
         saveConfig();
-
-        this.enabled = defaultEnabled;
     }
 
     /**
@@ -261,15 +280,16 @@ public abstract class BaseModule implements Listener {
      */
     public boolean checkDependencies() {
         // External plugins
-        for (String pluginName : requiredPlugins) {
-            if (pluginName == null || pluginName.isEmpty()) continue;
+    	for (String pluginName : requiredPlugins) {
+    	    org.bukkit.plugin.Plugin dep = plugin.getServer()
+    	            .getPluginManager()
+    	            .getPlugin(pluginName);
 
-            org.bukkit.plugin.Plugin p = plugin.getServer().getPluginManager().getPlugin(pluginName);
-            if (p == null || !p.isEnabled()) {
-                log("Missing or disabled required plugin: " + pluginName);
-                return false;
-            }
-        }
+    	    if (dep == null || !dep.isEnabled()) {
+    	        log("Missing or disabled required plugin: " + pluginName);
+    	        return false;
+    	    }
+    	}
 
         // Other modules
         for (String moduleId : requiredModules) {
@@ -354,7 +374,6 @@ public abstract class BaseModule implements Listener {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private Listener instantiateListener(Class<?> clazz) {
         try {
             // Try (BaseModule)
@@ -559,5 +578,29 @@ public abstract class BaseModule implements Listener {
     public void log(String message) {
         getLogger().info("[" + moduleName + "] " + message);
     }
+    
+
+	/**
+	 * Modules this module depends on (must exist and be enabled).
+	 */
+	public List<String> getRequiredModules() {
+	    return Collections.unmodifiableList(requiredModules);
+	}
+	
+	/**
+	 * Modules that should be loaded/enabled BEFORE this module.
+	 * Comes from meta.preload_before in the module config.
+	 */
+	public List<String> getPreloadBefore() {
+	    return Collections.unmodifiableList(preloadBefore);
+	}
+	
+	/**
+	 * Plugins that must be present/enabled for this module to work.
+	 * (Optional, but nice to expose.)
+	 */
+	public List<String> getRequiredPlugins() {
+	    return Collections.unmodifiableList(requiredPlugins);
+	}
 
 }

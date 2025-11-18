@@ -82,7 +82,15 @@ public class Main extends JavaPlugin
         profileManager = new ProfileManager(storage);
         
 		languageManager = new YamlLanguageManager(getLogger());
+
 		moduleManager = new ModuleManager(database);
+
+        // Register modules here
+        moduleManager.registerModule(new modules.economy.Main());
+
+        // Load + enable in dependency order
+        moduleManager.bootstrapModules();
+		
 		commandCentral = new CommandCentral(this, database, languageManager);
 		
 		registerModules();
@@ -98,8 +106,9 @@ public class Main extends JavaPlugin
 	public void onDisable() {
 
 		if (moduleManager != null) {
-			moduleManager.disableAll();
-		}
+            moduleManager.disableAll();
+            moduleManager.shutdownAll();
+        }
 
 		if (profileManager != null) {
 			profileManager.clear();

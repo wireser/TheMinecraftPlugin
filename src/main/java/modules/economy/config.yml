@@ -1,0 +1,35 @@
+meta:
+  name: "Economy"
+  description: "Basic money economy module"
+  version: "1.0.0"
+  enabled: true
+
+  # External plugin dependencies (checked + must be enabled)
+  required_plugins: [ ]
+
+  # Module dependencies (by module name)
+  required_modules: [ ]
+
+config:
+  # Starting balance for new players if your profile system uses it
+  default_balance: 0.0
+
+  currency:
+    # Symbol shown in messages, purely visual
+    symbol: "$"
+    # Decimal places to show (0 = integer money)
+    decimals: 2
+
+  pay:
+    # Minimum and maximum allowed /pay amount
+    min_amount: 0.01
+    max_amount: 1000000.0
+
+    # Allow paying yourself
+    allow_self: false
+
+    tax:
+      # If true, tax is removed from the amount and destroyed (sink)
+      enabled: false
+      # Percent from 0.0 to 100.0 (e.g. 5.0 = 5%)
+      percent: 0.0
