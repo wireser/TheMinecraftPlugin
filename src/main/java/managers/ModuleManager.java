@@ -15,15 +15,12 @@ import main.Main;
 public class ModuleManager {
 	
     private final Map<String, BaseModule> modules = new HashMap<>();
-    private boolean lastDatabaseState = true;
-    private final Main instance;
     
     
     @SuppressWarnings("unused")
 	private final Database database;
     
-    public ModuleManager(Main plugin, Database database) {
-        this.instance = plugin;
+    public ModuleManager(Database database) {
         this.database = database;
     }
     
@@ -180,62 +177,6 @@ public class ModuleManager {
     }
     
     /**
-     * Gets all modules that depend on database connectivity.
-     * 
-     * @return A list of database-dependent modules
-     */
-    public List<BaseModule> getDatabaseDependentModules() {
-        return modules.values().stream()
-            .filter(BaseModule::requiresDatabase)
-            .collect(Collectors.toList());
-    }
-    
-    /**
-     * Checks the database state and enables/disables modules as needed.
-     * This should be called periodically to handle database connectivity changes.
-     */
-    public void checkDatabaseState() {
-        boolean currentState = instance.getDatabase().isAlive();
-        if (currentState != lastDatabaseState) {
-            if (currentState) {
-                onDatabaseOnline();
-            } else {
-                onDatabaseOffline();
-            }
-            lastDatabaseState = currentState;
-        }
-    }
-    
-    /**
-     * Handles actions when the database comes online.
-     * Enables database-dependent modules that were disabled due to database unavailability.
-     */
-    private void onDatabaseOnline() {
-        for (BaseModule module : modules.values()) {
-            if (module.requiresDatabase() && !module.isEnabled()) {
-                // Only enable if dependencies are met
-                if (module.checkDependencies()) {
-                    module.log("Database online - enabling module");
-                    module.enable();
-                }
-            }
-        }
-    }
-    
-    /**
-     * Handles actions when the database goes offline.
-     * Disables database-dependent modules to prevent errors.
-     */
-    private void onDatabaseOffline() {
-        for (BaseModule module : modules.values()) {
-            if (module.requiresDatabase() && module.isEnabled()) {
-                module.log("Database offline - disabling module");
-                module.disable();
-            }
-        }
-    }
-    
-    /**
      * Repairs module configurations by reloading defaults.
      * This can be used to recover from corrupted or missing configuration files.
      */
@@ -266,4 +207,5 @@ public class ModuleManager {
             }
         }
     }
+    
 }
