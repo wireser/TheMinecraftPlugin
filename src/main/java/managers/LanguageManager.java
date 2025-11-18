@@ -1,33 +1,70 @@
 package managers;
 
+import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Provides access to localized messages from config or resource files.
- * Implementations should be safe to call frequently from the main thread.
+ * Per-scope language accessor (e.g. per module).
+ *
+ * Implementations are expected to:
+ * - load messages from configuration (YAML, etc.)
+ * - cache them in memory
+ * - return Components with colors already parsed
+ *
+ * Keys are treated as case-insensitive.
  */
 public interface LanguageManager {
 
     /**
-     * Gets a message by key, or the fallback if not found.
-     *
-     * @param key      Language key (e.g. "command.no_permission")
-     * @param fallback Fallback value if the key is missing
-     * @return Localized text or fallback
+     * Maximum allowed length of a single message.
+     * Longer values are treated as invalid and replaced by a placeholder.
      */
-    @NotNull
-    String get(@NotNull String key, @NotNull String fallback);
+    int MAX_MESSAGE_LENGTH = 512;
 
     /**
-     * Gets and formats a message by key, or uses the fallback format string.
-     * Arguments are passed to String.format (or similar) internally.
+     * Gets a localized message as a Component by key.
      *
-     * @param key       Language key
-     * @param fallback  Fallback format string
-     * @param arguments Arguments to interpolate
-     * @return Localized and formatted message
+     * @param key language key (e.g. "error_warp_not_found")
+     * @return localized Component; never {@code null}.
+     *         Missing/invalid keys return a red %KEY% placeholder.
      */
     @NotNull
-    String getFormatted(@NotNull String key, @NotNull String fallback, Object... arguments);
-    
+    Component get(@NotNull String key);
+
+    /**
+     * Gets a localized message as a Component and applies positional placeholders.
+     *
+     * Placeholders:
+     *   %1, %2, ..., %N
+     *
+     * Example:
+     *   lang.yml: error_warp_not_found: "&7Error: &cWe cant find warp &f%1&7."
+     *   lang.get("error_warp_not_found", warpName);
+     *
+     * @param key       language key
+     * @param arguments positional arguments (%1..%N)
+     * @return localized Component; never {@code null}
+     */
+    @NotNull
+    Component get(@NotNull String key, Object... arguments);
+
+    /**
+     * Plain-text version of the message with colors stripped.
+     *
+     * @param key language key
+     * @return plain text; never {@code null}
+     */
+    @NotNull
+    String getString(@NotNull String key);
+
+    /**
+     * Plain-text version with positional arguments applied.
+     *
+     * @param key       language key
+     * @param arguments positional arguments
+     * @return plain text; never {@code null}
+     */
+    @NotNull
+    String getString(@NotNull String key, Object... arguments);
+
 }

@@ -12,7 +12,7 @@ import database.DatabaseAccess;
 import managers.ConfigManager;
 import managers.LanguageManager;
 import managers.ModuleManager;
-import managers.SimpleLanguageManager;
+import managers.YamlLanguageManager;
 import playerdata.Profile;
 import playerdata.ProfileManager;
 import playerdata.ProfileStorage;
@@ -42,7 +42,7 @@ public class Main extends JavaPlugin
 	/** Handles enabling, disabling and monitoring of plugin modules. */
 	private ModuleManager moduleManager;
 	
-	private SimpleLanguageManager languageManager;
+	private LanguageManager languageManager;
 	
 	private ConfigManager mainConfig;
 	
@@ -81,7 +81,7 @@ public class Main extends JavaPlugin
         ProfileStorage storage = new ProfileStorage(databaseAccess, this.getLogger());
         profileManager = new ProfileManager(storage);
         
-		languageManager = new SimpleLanguageManager();
+		languageManager = new YamlLanguageManager(getLogger());
 		moduleManager = new ModuleManager(this, database);
 		commandCentral = new CommandCentral(this, database, languageManager);
 		
