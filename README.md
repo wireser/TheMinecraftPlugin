@@ -11,13 +11,13 @@ Even though this is a hobby project, it’s designed with the intention of being
 ---
 
 ## 📖 About the Project
-TheMinecraftPlugin started as my personal learning project years ago — the thing I rebuilt every time I learned something new about Java, game server architecture, web development, or backend systems. I’ve scrapped and rewritten this plugin multiple times, each version cleaner and more stable than the last. This release marks the beginning of the **final, long-term version**. It’s not complete yet, but its **foundation is finally right** — modular, future-proof, and designed to grow with the server ecosystem rather than fight against it.
+TheMinecraftPlugin started as my personal learning project years ago, the thing I rebuilt every time I learned something new about Java, game server architecture, web development, or backend systems. I’ve scrapped and rewritten this plugin multiple times, each version cleaner and more stable than the last. This release marks the beginning of the **final, long-term version**. It’s not complete yet, but its **foundation is finally right**, modular, future-proof, and designed to grow with the server ecosystem rather than fight against it.
 
 I’m sharing it publicly because:
 - I want others to be able to learn from the code the same way I learned from the plugins before me  
 - I believe servers shouldn’t have to juggle 30+ plugins when one well-made system can handle it  
 - Open development makes quality better  
-- And honestly… it’s fun to build something big and see people use it
+- And honestly... it’s fun to build something big and see people use it
 
 This plugin is open-source, collaborative, and constantly evolving.
 
