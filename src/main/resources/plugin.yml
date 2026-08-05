@@ -8,7 +8,7 @@ website: www.theminecraftplugin.com
 version: ${project.version}
 main: main.Main
 load: POSTWORLD
-api-version: '1.21'
+api-version: '26.2'
 prefix: TheMinecraftPlugin
 
 # DEPENDENCIES
