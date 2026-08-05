@@ -3,8 +3,13 @@ package playerdata;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 import org.bukkit.GameMode;
@@ -15,657 +20,951 @@ import org.bukkit.inventory.ItemStack;
 
 import enums.Currency;
 import enums.Perm;
-import main.Main;
 import model.Group;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 
 /**
- * Represents a player within the plugin domain.
- * <p>
- * A {@code Profile} can exist for:
+ * Represents a player inside the plugin domain.
+ *
+ * <p>A {@code Profile} can represent either:</p>
+ *
  * <ul>
- *   <li>an online player (with a non-null {@link Player})</li>
- *   <li>an offline player (no {@link Player}, only id/uuid loaded from DB)</li>
+ *     <li>
+ *         an <strong>online session profile</strong>, containing a Bukkit
+ *         {@link Player} and cached persistent values, or
+ *     </li>
+ *     <li>
+ *         a <strong>temporary offline profile</strong>, containing persistent
+ *         identity but no Bukkit {@link Player}.
+ *     </li>
  * </ul>
  *
- * Responsibilities:
+ * <p>Online profiles are created and owned by {@link ProfileManager}. There
+ * should be exactly one live {@code Profile} instance for each online UUID.</p>
+ *
+ * <p>Offline profiles are temporary. Code should not place offline
+ * {@code Profile} objects into long-lived maps or fields. Store the UUID or
+ * database id instead and resolve the profile again when required.</p>
+ *
+ * <h2>Caching policy</h2>
+ *
+ * <p>The following values are cached for online profiles because they are
+ * expected to be read frequently:</p>
+ *
  * <ul>
- *   <li>Expose core identity (database id, UUID, IGN, nick/display name)</li>
- *   <li>Provide convenience accessors for vanilla state (world, item in hand, XP, gamemode)</li>
- *   <li>Delegate persistent operations (balances, locations, social lists, stats, settings, timers)
- *       to {@link ProfileStorage}</li>
- *   <li>Offer a clear API for higher-level code: e.g. {@code isTrustedBy(ownerProfile)},
- *       {@code hasTicker("fly")}, {@code getBalance(Currency.MONEY)}</li>
+ *     <li>nickname</li>
+ *     <li>permission flags</li>
+ *     <li>balances</li>
+ *     <li>reply target</li>
+ *     <li>welcome message</li>
+ *     <li>friends</li>
+ *     <li>trusted players</li>
+ *     <li>ignored players</li>
+ *     <li>statistics after their first access</li>
  * </ul>
  *
- * This class does not perform low-level SQL. All persistence concerns should be handled in
- * {@link ProfileStorage}.
+ * <p>Stored locations, timers, bans and arbitrary boolean settings remain
+ * database-backed for now. Those values either change infrequently, have
+ * time-sensitive semantics, or require additional storage APIs before caching
+ * them safely.</p>
  */
 public final class Profile {
 
     // ======================================================================
-    // Core identity
+    // Persistence
+    // ======================================================================
+
+    /**
+     * Storage instance used by this profile.
+     *
+     * <p>The storage dependency is injected by {@link ProfileManager}. This
+     * deliberately avoids reaching through {@code Main.getInstance()} from
+     * inside the domain object.</p>
+     */
+    private final ProfileStorage storage;
+
+    // ======================================================================
+    // Identity
     // ======================================================================
 
     /**
      * Primary key from {@code players.id}.
-     * <p>
-     * A value of {@code 0} means the profile is not yet persisted/resolved.
      */
     private final int id;
 
     /**
-     * Mojang UUID, corresponding to {@code players.uuid}.
-     * <p>
-     * May be {@code null} for profiles created by id only.
+     * Mojang UUID.
      */
     private final UUID uuid;
 
     /**
-     * Last-known in-game name, corresponding to {@code players.name}.
+     * Current/last-known Minecraft username.
      */
     private final String ign;
 
     /**
-     * Stored nick/display name text from {@code players.nick}.
-     * <p>
-     * May be {@code null} if the player has no nick set.
+     * Plugin-defined nickname.
+     *
+     * <p>Mutable because a nickname may change during an online session.</p>
      */
-    private final String nick;
+    private String nick;
 
     /**
-     * Current permission group / rank, resolved externally (e.g. via a GroupManager).
-     * May be {@code null} if not yet assigned.
+     * Current group/rank.
      */
     private Group group;
 
     /**
-     * Online Bukkit player instance, or {@code null} if this is an offline profile.
+     * Bukkit player while this profile represents an online session.
+     *
+     * <p>{@code null} for temporary offline profiles.</p>
      */
     private final Player player;
 
     /**
-     * Additional internal flags for plugin-specific capabilities.
+     * True when this object is the session profile of an online player and
+     * therefore owns persistent-value caches.
+     *
+     * <p>This represents the kind of profile that was created, rather than
+     * repeatedly calling {@link Player#isOnline()}.</p>
+     */
+    private final boolean onlineCacheEnabled;
+
+    // ======================================================================
+    // Permission cache
+    // ======================================================================
+
+    /**
+     * Plugin-specific permission/capability flags.
      */
     private final List<Perm> flags = new ArrayList<>();
 
-    /**
-     * Component representation of the IGN.
-     */
-    private final Component nameComponent;
+    // ======================================================================
+    // Persistent online caches
+    // ======================================================================
 
     /**
-     * Component representation of the display name, derived from {@link #nick} if present,
-     * otherwise from {@link #ign}.
+     * Cached balances keyed by currency.
+     *
+     * <p>Fully populated when an online profile is created.</p>
      */
-    private final Component displayNameComponent;
+    private final EnumMap<Currency, BigDecimal> balances =
+            new EnumMap<>(Currency.class);
+
+    /**
+     * Cached reply target for online profiles.
+     */
+    private Integer replyTargetId;
+
+    /**
+     * Cached welcome message for online profiles.
+     */
+    private String welcome;
+
+    /**
+     * Cached friend ids for online profiles.
+     */
+    private final Set<Integer> friendIds = new HashSet<>();
+
+    /**
+     * Cached trust targets for online profiles.
+     */
+    private final Set<Integer> trustedIds = new HashSet<>();
+
+    /**
+     * Cached ignore targets for online profiles.
+     */
+    private final Set<Integer> ignoredIds = new HashSet<>();
+
+    /**
+     * Lazy stat cache.
+     *
+     * <p>Unlike balances, arbitrary stat keys are not known ahead of time.
+     * Therefore a stat is loaded on first access and then retained for the
+     * remainder of the online session.</p>
+     */
+    private final Map<String, Long> statCache = new HashMap<>();
 
     // ======================================================================
     // Construction
     // ======================================================================
 
     /**
-     * Creates a profile for an online player.
-     * <p>
-     * This constructor is intended to be the main entry point when a player is online.
-     * Higher-level code (e.g. a {@code ProfileManager}) is expected to populate database-id,
-     * nick, group, and flags based on stored data and pass them in here or via an
-     * alternative constructor if you prefer.
+     * Creates a fully identified profile.
      *
-     * @param player the online Bukkit player
-     */
-    public Profile(Player player) {
-        this(
-            /* id     */ 0,
-            /* uuid   */ Objects.requireNonNull(player, "player").getUniqueId(),
-            /* ign    */ player.getName(),
-            /* nick   */ null,
-            /* group  */ null,
-            /* player */ player,
-            /* flags  */ null
-        );
-    }
-
-    /**
-     * Creates a profile anchored by a database id.
-     * <p>
-     * This is suitable for offline operations where only {@code players.id} is known.
-     * The caller is responsible for loading further details (IGN, nick, group) from
-     * {@link ProfileStorage} and creating a richer instance if needed.
+     * <p>Profiles should normally be created by {@link ProfileManager}, rather
+     * than directly by command/event code.</p>
      *
-     * @param id database primary key (players.id)
-     */
-    public Profile(int id) {
-        this(id, null, null, null, null, null, null);
-    }
-
-    /**
-     * Creates a profile anchored by a UUID.
-     * <p>
-     * This is suitable for offline operations where only the UUID is known.
-     * The caller is responsible for loading further details (database id, IGN, nick, group)
-     * from {@link ProfileStorage} if needed.
-     *
+     * @param storage persistent storage implementation
+     * @param id database player id
      * @param uuid Mojang UUID
+     * @param ign current/last-known username
+     * @param nick stored nickname, may be {@code null}
+     * @param group current group, may be {@code null}
+     * @param player Bukkit player for online profiles, otherwise {@code null}
+     * @param initialFlags initial plugin flags, may be {@code null}
      */
-    public Profile(UUID uuid) {
-        this(0, Objects.requireNonNull(uuid, "uuid"), null, null, null, null, null);
-    }
-
-    /**
-     * Internal full constructor used by other constructors and by higher-level code
-     * (e.g. a ProfileManager) to create a fully hydrated profile instance.
-     *
-     * @param id          database id, or 0 if not yet persisted
-     * @param uuid        Mojang UUID, may be null for id-only profiles
-     * @param ign         in-game name, may be null for id-only profiles
-     * @param nick        stored nick (players.nick), may be null
-     * @param group       group / rank, may be null
-     * @param player      online player instance, may be null for offline profiles
-     * @param initialFlags initial flags, may be null
-     */
-    public Profile(int id,
-                   UUID uuid,
-                   String ign,
-                   String nick,
-                   Group group,
-                   Player player,
-                   List<Perm> initialFlags) {
+    Profile(
+            ProfileStorage storage,
+            int id,
+            UUID uuid,
+            String ign,
+            String nick,
+            Group group,
+            Player player,
+            List<Perm> initialFlags
+    ) {
+        this.storage = Objects.requireNonNull(storage, "storage");
 
         this.id = id;
-        this.uuid = uuid;
+        this.uuid = Objects.requireNonNull(uuid, "uuid");
         this.ign = ign;
         this.nick = nick;
         this.group = group;
         this.player = player;
 
+        this.onlineCacheEnabled = player != null;
+
         if (initialFlags != null && !initialFlags.isEmpty()) {
             this.flags.addAll(initialFlags);
         }
-
-        // Components may be null if ign/nick are not yet known; callers should avoid
-        // using these accessors until identity has been loaded.
-        this.nameComponent = ign != null ? Component.text(ign) : Component.empty();
-        this.displayNameComponent = (nick != null && !nick.isEmpty())
-                ? Component.text(nick)
-                : (ign != null ? Component.text(ign) : Component.empty());
     }
 
     // ======================================================================
-    // Internal helpers
+    // Cache lifecycle
     // ======================================================================
 
     /**
-     * Convenience accessor for the shared {@link ProfileStorage} instance.
+     * Loads all persistent values that should remain cached while this player
+     * is online.
      *
-     * @return storage helper used for all persistent operations
+     * <p>This method is package-private because {@link ProfileManager} owns the
+     * profile lifecycle and should decide when the initial cache is populated.</p>
+     *
+     * <p>Calling this method for a temporary offline profile does nothing.</p>
      */
-    private ProfileStorage storage() {
-        return Main.getInstance().getProfileStorage();
+    void loadOnlineCache() {
+        if (!onlineCacheEnabled) {
+            return;
+        }
+
+        /*
+         * Balances are ideal cache candidates:
+         * small fixed key set and potentially very frequent reads.
+         */
+        balances.clear();
+
+        for (Currency currency : Currency.values()) {
+            balances.put(
+                    currency,
+                    storage.getBalance(this, currency)
+            );
+        }
+
+        /*
+         * Tiny player-table values that may be used repeatedly by commands.
+         */
+        replyTargetId = storage.getReplyTargetId(this);
+        welcome = storage.getWelcome(this);
+
+        /*
+         * Relationship lists are particularly important to cache because they
+         * may eventually be checked inside high-frequency Bukkit events such as
+         * block interaction or chat.
+         */
+        friendIds.clear();
+        friendIds.addAll(storage.getFriendIds(this));
+
+        trustedIds.clear();
+        trustedIds.addAll(storage.getTrustedIds(this));
+
+        ignoredIds.clear();
+        ignoredIds.addAll(storage.getIgnoredIds(this));
+
+        /*
+         * Arbitrary stats are lazy-loaded, so refreshing invalidates anything
+         * previously remembered.
+         */
+        statCache.clear();
+    }
+
+    /**
+     * Reloads this online profile's cached persistent data from the database.
+     *
+     * <p>This should normally not be necessary because all plugin mutations
+     * should pass through {@code Profile} methods, which update the database
+     * and cache together.</p>
+     *
+     * <p>It is useful when something outside the normal profile API has changed
+     * persistent data and the online cache must be resynchronized.</p>
+     */
+    public void refreshCache() {
+        if (!onlineCacheEnabled) {
+            return;
+        }
+
+        this.nick = storage.getNick(id);
+
+        this.flags.clear();
+        this.flags.addAll(storage.loadFlags(id));
+
+        loadOnlineCache();
+    }
+
+    /**
+     * @return {@code true} when this object owns an online-session cache
+     */
+    public boolean isCachedOnlineProfile() {
+        return onlineCacheEnabled;
     }
 
     // ======================================================================
-    // Management tools – identity, group, flags
+    // Identity
     // ======================================================================
 
     /**
-     * @return database id from {@code players.id}, or {@code 0} if unknown.
+     * @return primary key from {@code players.id}
      */
     public int getId() {
         return id;
     }
 
     /**
-     * @return the Mojang UUID, or {@code null} if this profile was created by id only.
+     * @return Mojang UUID
      */
     public UUID getUuid() {
         return uuid;
     }
 
     /**
-     * @return the Mojang UUID as a string, or {@code null} if there is no UUID.
+     * @return UUID as a string
      */
     public String getUuidString() {
-        return uuid != null ? uuid.toString() : null;
+        return uuid.toString();
     }
 
     /**
-     * @return the stored in-game name (IGN), or {@code null} if not yet loaded.
+     * @return current/last-known Minecraft username
      */
     public String getIgn() {
         return ign;
     }
 
     /**
-     * @return the raw nick string from {@code players.nick}, or {@code null} if none.
+     * Returns the plugin nickname.
+     *
+     * <p>Nickname is held directly by the profile and therefore does not cause
+     * a database lookup.</p>
+     *
+     * @return nickname, or {@code null} if none exists
      */
     public String getNick() {
         return nick;
     }
 
     /**
-     * @return effective display name as {@link Component}:
-     *         nick if present, otherwise IGN, otherwise an empty component.
+     * Changes the player's nickname.
+     *
+     * <p>The database is updated first, then this profile's local representation
+     * is changed. The storage method required by this function is included
+     * below this class.</p>
+     *
+     * @param nick new nickname, or {@code null}/blank to remove it
      */
-    public Component getDisplayName() {
-        return displayNameComponent;
+    public void setNick(String nick) {
+        String normalized =
+                nick == null || nick.isBlank()
+                        ? null
+                        : nick;
+
+        storage.setNick(this, normalized);
+        this.nick = normalized;
     }
 
     /**
-     * @return the name component representing the IGN, or empty if unknown.
+     * Returns the Minecraft username as an Adventure component.
+     *
+     * @return username component, or an empty component if unavailable
      */
     public Component getNameComponent() {
-        return nameComponent;
+        return ign != null
+                ? Component.text(ign)
+                : Component.empty();
     }
 
     /**
-     * @return the currently assigned group / rank, or {@code null} if not yet resolved.
+     * Returns the effective display name.
+     *
+     * <p>The nickname is evaluated when this method is called rather than
+     * storing a second immutable component that could become stale after
+     * {@link #setNick(String)}.</p>
+     *
+     * @return nickname if present, otherwise Minecraft username
+     */
+    public Component getDisplayName() {
+        if (nick != null && !nick.isBlank()) {
+            return Component.text(nick);
+        }
+
+        return getNameComponent();
+    }
+
+    /**
+     * @return current group/rank, or {@code null} if unresolved
      */
     public Group getGroup() {
         return group;
     }
 
     /**
-     * Assigns a group / rank to this profile.
+     * Updates the runtime group reference.
      *
-     * @param group the group to assign, may be {@code null}
+     * @param group new group
      */
     public void setGroup(Group group) {
         this.group = group;
     }
 
+    // ======================================================================
+    // Flags
+    // ======================================================================
+
     /**
-     * @return an unmodifiable view of the internal permission flags for this profile.
+     * @return read-only view of plugin permission flags
      */
     public List<Perm> getFlags() {
         return Collections.unmodifiableList(flags);
     }
 
     /**
-     * Adds a permission flag to this profile if it is not already present.
+     * Adds a permission flag if absent.
      *
-     * @param flag flag to add, ignored if {@code null}
+     * @param flag flag to add
      */
     public void addFlag(Perm flag) {
-        if (flag == null) return;
-        if (!flags.contains(flag)) {
+        if (flag != null && !flags.contains(flag)) {
             flags.add(flag);
         }
     }
 
     /**
-     * Removes a permission flag from this profile.
+     * Removes a permission flag.
      *
-     * @param flag flag to remove, ignored if {@code null}
+     * @param flag flag to remove
      */
     public void removeFlag(Perm flag) {
-        if (flag == null) return;
-        flags.remove(flag);
+        if (flag != null) {
+            flags.remove(flag);
+        }
     }
 
     /**
-     * Clears all permission flags for this profile.
+     * Removes every plugin permission flag.
      */
     public void clearFlags() {
         flags.clear();
     }
 
     /**
-     * Checks whether the profile has the given permission flag.
+     * Checks whether this profile has a plugin-specific flag.
      *
      * @param flag flag to check
-     * @return {@code true} if the flag is present, otherwise {@code false}
+     * @return true when present
      */
     public boolean hasFlag(Perm flag) {
         return flag != null && flags.contains(flag);
     }
 
     // ======================================================================
-    // Vanilla tools – player, world, gamemode, XP, items
+    // Bukkit / online state
     // ======================================================================
 
     /**
-     * @return the online {@link Player} instance, or {@code null} if this profile is offline.
+     * @return Bukkit player, or {@code null} for offline profiles
      */
     public Player getPlayer() {
         return player;
     }
 
     /**
-     * @return the world of the player if online, otherwise {@code null}.
+     * Checks whether the Bukkit player represented by this profile is currently
+     * online.
+     *
+     * @return true if a live online Bukkit player is available
+     */
+    public boolean isOnline() {
+        return player != null && player.isOnline();
+    }
+
+    /**
+     * @return player's world, or null if offline
      */
     public World getWorld() {
-        return player != null ? player.getWorld() : null;
+        return player != null
+                ? player.getWorld()
+                : null;
     }
 
     /**
-     * Checks whether the player is currently in the specified world.
+     * Checks whether the player is currently in a specific world.
      *
      * @param world target world
-     * @return {@code true} if the player is online and in the given world
+     * @return true when online and inside that world
      */
     public boolean isInWorld(World world) {
-        return player != null && world != null && player.getWorld().equals(world);
+        return player != null
+                && world != null
+                && player.getWorld().equals(world);
     }
 
     /**
-     * Checks whether the player is currently in the specified world by name.
+     * Checks whether the player is currently in a world by name.
      *
-     * @param worldName case-insensitive world name
-     * @return {@code true} if the player is online and located in the named world
+     * @param worldName target world name
+     * @return true when names match case-insensitively
      */
     public boolean isInWorld(String worldName) {
-        return player != null && worldName != null
-                && player.getWorld().getName().equalsIgnoreCase(worldName);
+        return player != null
+                && worldName != null
+                && player.getWorld()
+                         .getName()
+                         .equalsIgnoreCase(worldName);
     }
 
     /**
-     * @return the current location of the player if online, otherwise {@code null}.
+     * @return current Bukkit location, or null if offline
      */
     public Location getLocation() {
-        return player != null ? player.getLocation() : null;
+        return player != null
+                ? player.getLocation()
+                : null;
     }
 
     /**
-     * @return the item currently held in the main hand if the player is online,
-     *         otherwise {@code null}.
+     * @return main-hand item, or null if offline
      */
     public ItemStack getItemInHand() {
-        return player != null ? player.getInventory().getItemInMainHand() : null;
+        return player != null
+                ? player.getInventory().getItemInMainHand()
+                : null;
     }
 
     /**
-     * @return the vanilla experience level of the player, or 0 if offline.
+     * @return vanilla level, or 0 if offline
      */
     public int getVanillaLevel() {
-        return player != null ? player.getLevel() : 0;
+        return player != null
+                ? player.getLevel()
+                : 0;
     }
 
     /**
-     * @return the total vanilla experience of the player, or 0 if offline.
+     * @return total vanilla experience, or 0 if offline
      */
     public int getVanillaXP() {
-        return player != null ? player.getTotalExperience() : 0;
+        return player != null
+                ? player.getTotalExperience()
+                : 0;
     }
 
     /**
-     * @return {@code true} if the player is online and in SURVIVAL mode.
+     * @return true when online in survival mode
      */
     public boolean isInSurvival() {
-        return player != null && player.getGameMode() == GameMode.SURVIVAL;
+        return player != null
+                && player.getGameMode() == GameMode.SURVIVAL;
     }
 
     /**
-     * @return {@code true} if the player is online and in CREATIVE mode.
+     * @return true when online in creative mode
      */
     public boolean isInCreative() {
-        return player != null && player.getGameMode() == GameMode.CREATIVE;
+        return player != null
+                && player.getGameMode() == GameMode.CREATIVE;
     }
 
     /**
-     * @return {@code true} if the player is online and in ADVENTURE mode.
+     * @return true when online in adventure mode
      */
     public boolean isInAdventure() {
-        return player != null && player.getGameMode() == GameMode.ADVENTURE;
+        return player != null
+                && player.getGameMode() == GameMode.ADVENTURE;
     }
 
     /**
-     * @return {@code true} if the player is online and in SPECTATOR mode.
+     * @return true when online in spectator mode
      */
     public boolean isInSpectator() {
-        return player != null && player.getGameMode() == GameMode.SPECTATOR;
+        return player != null
+                && player.getGameMode() == GameMode.SPECTATOR;
     }
 
     /**
-     * Returns the current IP address of the player.
-     * <p>
-     * This information is runtime-only and is not persisted to the database.
+     * Returns the player's current network address.
      *
-     * @return IP address string, or {@code null} if the player is offline or the address is unavailable
+     * @return IP address string, or null when unavailable/offline
      */
     public String getIp() {
         if (player == null || player.getAddress() == null) {
             return null;
         }
-        return player.getAddress().getAddress().getHostAddress();
+
+        return player.getAddress()
+                     .getAddress()
+                     .getHostAddress();
     }
 
     /**
-     * Checks permissions using Bukkit's permission system, OP status and optionally
-     * the assigned group.
+     * Checks command/permission access.
      *
-     * @param node permission node to check
-     * @return {@code true} if the player is online and has the permission,
-     *         or if the group grants it; otherwise {@code false}
+     * @param node Bukkit permission node or group command key
+     * @return true when granted
      */
     public boolean hasPermission(String node) {
-        if (node == null || node.isEmpty()) {
+        if (node == null || node.isBlank()) {
             return false;
         }
 
-        if (player != null) {
-            if (player.isOp() || player.hasPermission(node)) {
-                return true;
-            }
-        }
-
-        // Optional: treat group command access as a permission mapping.
-        if (group != null && group.hasCommand(node)) {
+        if (player != null
+                && (player.isOp() || player.hasPermission(node))) {
             return true;
         }
 
-        return false;
+        return group != null && group.hasCommand(node);
     }
 
     // ======================================================================
-    // Messaging helpers
+    // Messaging
     // ======================================================================
 
     /**
-     * Sends a pre-built component message to the player if online.
+     * Sends an Adventure component when the player is online.
      *
-     * @param component message to send
+     * @param component component to send
      */
     public void sendMessage(Component component) {
-        if (player == null || component == null) return;
+        if (player == null || component == null) {
+            return;
+        }
+
         player.sendMessage(component);
     }
 
     /**
-     * Sends a plain text message formatted with the specified color.
+     * Sends plain text using the requested Adventure colour.
      *
-     * @param color text color
-     * @param text  raw message text
+     * @param color text colour
+     * @param text message
      */
     public void sendMessage(NamedTextColor color, String text) {
-        if (text == null || text.isEmpty()) return;
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+
         sendMessage(Component.text(text, color));
     }
 
     /**
-     * Sends a formatted message constructed using {@link String#format(String, Object...)}.
+     * Sends formatted text using {@link String#format(String, Object...)}.
      *
-     * @param color    text color
+     * @param color text colour
      * @param template format template
-     * @param args     format arguments
+     * @param args format arguments
      */
-    public void sendMessage(NamedTextColor color, String template, Object... args) {
-        if (template == null || template.isEmpty()) return;
-        String formatted = (args == null || args.length == 0)
-                ? template
-                : String.format(template, args);
+    public void sendMessage(
+            NamedTextColor color,
+            String template,
+            Object... args
+    ) {
+        if (template == null || template.isEmpty()) {
+            return;
+        }
+
+        String formatted =
+                args == null || args.length == 0
+                        ? template
+                        : String.format(template, args);
+
         sendMessage(Component.text(formatted, color));
     }
 
-    // Legacy-style aliases
+    /*
+     * Legacy convenience aliases retained because the short form is useful
+     * throughout command code.
+     */
 
     public void msg(NamedTextColor color, String template) {
         sendMessage(color, template);
     }
 
-    public void msg(NamedTextColor color, String template, String arg) {
+    public void msg(
+            NamedTextColor color,
+            String template,
+            String arg
+    ) {
         sendMessage(color, template, arg);
     }
 
-    public void msg(NamedTextColor color, String template, String arg1, String arg2) {
+    public void msg(
+            NamedTextColor color,
+            String template,
+            String arg1,
+            String arg2
+    ) {
         sendMessage(color, template, arg1, arg2);
     }
 
-    public void msg(NamedTextColor color, String template, double remaining) {
+    public void msg(
+            NamedTextColor color,
+            String template,
+            double remaining
+    ) {
         sendMessage(color, template, remaining);
     }
 
     // ======================================================================
-    // Special tools – backed by ProfileStorage
+    // Stored locations
     // ======================================================================
 
-    // ---------- Generic locations ----------
-
     /**
-     * Retrieves a stored location for the given logical key from the database.
-     * <p>
-     * Some typical keys:
-     * <ul>
-     *   <li>{@code "home:main"}</li>
-     *   <li>{@code "death"}</li>
-     *   <li>{@code "back"}</li>
-     * </ul>
+     * Loads a named persistent location.
+     *
+     * <p>Locations remain database-backed because they are normally accessed
+     * far less frequently than balances or relationship checks.</p>
      *
      * @param key logical location key
-     * @return stored {@link Location}, or {@code null} if none is stored or an error occurs
+     * @return stored location or null
      */
     public Location getStoredLocation(String key) {
-        return storage().getLocation(this, key);
+        if (key == null || key.isBlank()) {
+            return null;
+        }
+
+        return storage.getLocation(this, key);
     }
 
     /**
-     * Stores or updates a location under the given logical key.
+     * Stores or removes a named location.
      *
-     * @param key      logical location key
-     * @param location location to store, or {@code null} to remove
+     * @param key logical location key
+     * @param location location, or null to delete
      */
-    public void setStoredLocation(String key, Location location) {
+    public void setStoredLocation(
+            String key,
+            Location location
+    ) {
+        if (key == null || key.isBlank()) {
+            return;
+        }
+
         if (location == null) {
-            storage().deleteLocation(this, key);
+            storage.deleteLocation(this, key);
         } else {
-            storage().setLocation(this, key, location);
+            storage.setLocation(this, key, location);
         }
     }
 
     /**
-     * Deletes a stored location for the given key.
+     * Removes a named persistent location.
      *
      * @param key logical location key
      */
     public void deleteStoredLocation(String key) {
-        storage().deleteLocation(this, key);
+        if (key == null || key.isBlank()) {
+            return;
+        }
+
+        storage.deleteLocation(this, key);
     }
 
-    // ---------- Balances (BigDecimal) ----------
+    // ======================================================================
+    // Balances
+    // ======================================================================
 
     /**
-     * Returns the current balance for the given currency.
+     * Returns a currency balance.
      *
-     * @param currency currency key
-     * @return non-null {@link BigDecimal} balance (zero if not set or on error)
+     * <p>Online profiles read exclusively from the preloaded balance cache.
+     * Offline profiles query persistent storage directly.</p>
+     *
+     * @param currency currency
+     * @return balance, never null
      */
     public BigDecimal getBalance(Currency currency) {
-        return storage().getBalance(this, currency);
+        if (currency == null) {
+            return BigDecimal.ZERO;
+        }
+
+        if (onlineCacheEnabled) {
+            return balances.getOrDefault(
+                    currency,
+                    BigDecimal.ZERO
+            );
+        }
+
+        return storage.getBalance(this, currency);
     }
 
     /**
-     * Sets the balance for the given currency.
+     * Sets a currency balance.
      *
-     * @param currency currency key
-     * @param amount   new balance value (non-null)
-     */
-    public void setBalance(Currency currency, BigDecimal amount) {
-        storage().setBalance(this, currency, amount);
-    }
-
-    /**
-     * Adds a delta to the balance for the given currency.
+     * <p>Persistence is performed first. The online cache is then updated so
+     * subsequent reads require no database query.</p>
      *
-     * @param currency currency key
-     * @param delta    amount to add (may be negative)
+     * @param currency currency
+     * @param amount new balance
      */
-    public void addBalance(Currency currency, BigDecimal delta) {
-        if (delta == null || BigDecimal.ZERO.compareTo(delta) == 0) return;
-        storage().addBalance(this, currency, delta);
+    public void setBalance(
+            Currency currency,
+            BigDecimal amount
+    ) {
+        if (currency == null || amount == null) {
+            return;
+        }
+
+        storage.setBalance(this, currency, amount);
+
+        if (onlineCacheEnabled) {
+            balances.put(currency, amount);
+        }
     }
 
     /**
-     * Subtracts a delta from the balance for the given currency.
+     * Adds a delta to a balance.
      *
-     * @param currency currency key
-     * @param delta    amount to subtract (ignored if negative or zero)
+     * @param currency currency
+     * @param delta amount to add; may be negative
      */
-    public void subBalance(Currency currency, BigDecimal delta) {
-        if (delta == null || delta.compareTo(BigDecimal.ZERO) <= 0) return;
-        storage().addBalance(this, currency, delta.negate());
+    public void addBalance(
+            Currency currency,
+            BigDecimal delta
+    ) {
+        if (currency == null
+                || delta == null
+                || delta.signum() == 0) {
+            return;
+        }
+
+        storage.addBalance(this, currency, delta);
+
+        if (onlineCacheEnabled) {
+            balances.merge(
+                    currency,
+                    delta,
+                    BigDecimal::add
+            );
+        }
     }
 
-    // ---------- Reply & welcome ----------
+    /**
+     * Subtracts a positive amount from a balance.
+     *
+     * @param currency currency
+     * @param delta amount to subtract
+     */
+    public void subBalance(
+            Currency currency,
+            BigDecimal delta
+    ) {
+        if (currency == null
+                || delta == null
+                || delta.signum() <= 0) {
+            return;
+        }
+
+        addBalance(currency, delta.negate());
+    }
+
+    // ======================================================================
+    // Reply target / welcome
+    // ======================================================================
 
     /**
-     * @return reply target player id ({@code players.id}) or {@code null} if none is set.
+     * Returns the stored reply target.
+     *
+     * @return database player id or null
      */
     public Integer getReplyTargetId() {
-        return storage().getReplyTargetId(this);
+        if (onlineCacheEnabled) {
+            return replyTargetId;
+        }
+
+        return storage.getReplyTargetId(this);
     }
 
     /**
-     * Updates reply target player id in the database.
+     * Changes the reply target.
      *
-     * @param targetId new reply target (may be {@code null} to clear)
+     * @param targetId target database player id, or null to clear
      */
     public void setReplyTargetId(Integer targetId) {
-        storage().setReplyTargetId(this, targetId);
+        storage.setReplyTargetId(this, targetId);
+
+        if (onlineCacheEnabled) {
+            this.replyTargetId = targetId;
+        }
     }
 
     /**
-     * @return stored welcome message or {@code null} if none is set.
+     * Returns the player's welcome message.
+     *
+     * @return message or null
      */
     public String getWelcome() {
-        return storage().getWelcome(this);
+        if (onlineCacheEnabled) {
+            return welcome;
+        }
+
+        return storage.getWelcome(this);
     }
 
     /**
-     * Sets or clears the stored welcome message.
+     * Changes the player's welcome message.
      *
-     * @param welcome new welcome message, or {@code null} to clear
+     * @param welcome new message or null
      */
     public void setWelcome(String welcome) {
-        storage().setWelcome(this, welcome);
+        storage.setWelcome(this, welcome);
+
+        if (onlineCacheEnabled) {
+            this.welcome = welcome;
+        }
     }
 
-    // ---------- Banned & timers ----------
+    // ======================================================================
+    // Ban / timers
+    // ======================================================================
 
     /**
-     * Indicates whether this profile is banned according to the database.
-     * <p>
-     * Implementation is provided by {@link ProfileStorage} and may take into account
-     * both hard bans and temporary bans implemented via timers.
+     * Checks current ban state.
      *
-     * @return {@code true} if the player is currently banned
+     * <p>Ban state remains storage-backed because temporary bans contain
+     * time-sensitive expiration information.</p>
+     *
+     * @return true when currently banned
      */
     public boolean isBanned() {
-        return storage().isBanned(this);
+        return storage.isBanned(this);
     }
 
     /**
-     * Checks whether a logical "ticker" or timer (e.g. {@code "fly"}, {@code "tempban"})
-     * is currently active for this profile.
+     * Checks a current timer/ticker.
      *
      * @param key timer key
-     * @return {@code true} if the timer is active, otherwise {@code false}
+     * @return true while active
      */
     public boolean hasTicker(String key) {
-        return storage().hasActiveTimer(this, key);
+        if (key == null || key.isBlank()) {
+            return false;
+        }
+
+        return storage.hasActiveTimer(this, key);
     }
 
-    // ---------- Social lists: friends / trust / ignore ----------
+    // ======================================================================
+    // Friends
+    // ======================================================================
 
     /**
      * Adds another player to this profile's friend list.
@@ -673,227 +972,451 @@ public final class Profile {
      * @param other target profile
      */
     public void addFriend(Profile other) {
-        if (other == null) return;
-        storage().addFriend(this, other.getId());
+        if (!isValidRelationTarget(other)) {
+            return;
+        }
+
+        int targetId = other.getId();
+
+        if (onlineCacheEnabled && friendIds.contains(targetId)) {
+            return;
+        }
+
+        storage.addFriend(this, targetId);
+
+        if (onlineCacheEnabled) {
+            friendIds.add(targetId);
+        }
     }
 
     /**
-     * Removes another player from this profile's friend list.
+     * Removes another player from the friend list.
      *
      * @param other target profile
      */
     public void removeFriend(Profile other) {
-        if (other == null) return;
-        storage().removeFriend(this, other.getId());
+        if (!isValidRelationTarget(other)) {
+            return;
+        }
+
+        int targetId = other.getId();
+
+        storage.removeFriend(this, targetId);
+
+        if (onlineCacheEnabled) {
+            friendIds.remove(targetId);
+        }
     }
 
     /**
-     * Checks whether this profile has the specified profile in its friend list.
+     * Checks whether another player is on this profile's friend list.
      *
      * @param other target profile
-     * @return {@code true} if this profile has {@code other} as a friend
+     * @return true when present
      */
     public boolean isFriendWith(Profile other) {
-        if (other == null) return false;
-        return storage().isFriend(this.getId(), other.getId());
+        if (!isValidRelationTarget(other)) {
+            return false;
+        }
+
+        if (onlineCacheEnabled) {
+            return friendIds.contains(other.getId());
+        }
+
+        return storage.isFriend(
+                this.id,
+                other.getId()
+        );
     }
 
     /**
-     * Returns a list of friend ids ({@code players.id}) associated with this profile.
+     * Returns all friend database ids.
      *
-     * @return unmodifiable list of friend ids (never {@code null})
+     * @return friend ids
      */
     public List<Integer> getFriendIds() {
-        return storage().getFriendIds(this);
+        if (onlineCacheEnabled) {
+            return List.copyOf(friendIds);
+        }
+
+        return storage.getFriendIds(this);
     }
 
+    // ======================================================================
+    // Trust
+    // ======================================================================
+
     /**
-     * Marks another profile as trusted by this profile (e.g. for land/claim access).
+     * Adds another profile to this player's trust list.
      *
      * @param other target profile
      */
     public void addTrustedPlayer(Profile other) {
-        if (other == null) return;
-        storage().addTrusted(this, other.getId());
+        if (!isValidRelationTarget(other)) {
+            return;
+        }
+
+        int targetId = other.getId();
+
+        if (onlineCacheEnabled && trustedIds.contains(targetId)) {
+            return;
+        }
+
+        storage.addTrusted(this, targetId);
+
+        if (onlineCacheEnabled) {
+            trustedIds.add(targetId);
+        }
     }
 
     /**
-     * Removes trust for another profile.
+     * Removes another profile from this player's trust list.
      *
      * @param other target profile
      */
     public void removeTrustedPlayer(Profile other) {
-        if (other == null) return;
-        storage().removeTrusted(this, other.getId());
+        if (!isValidRelationTarget(other)) {
+            return;
+        }
+
+        int targetId = other.getId();
+
+        storage.removeTrusted(this, targetId);
+
+        if (onlineCacheEnabled) {
+            trustedIds.remove(targetId);
+        }
     }
 
     /**
      * Checks whether this profile trusts another profile.
      *
      * @param other target profile
-     * @return {@code true} if this profile trusts {@code other}
+     * @return true when trusted
      */
     public boolean isTrustingPlayer(Profile other) {
-        if (other == null) return false;
-        return storage().isTrusted(this.getId(), other.getId());
+        if (!isValidRelationTarget(other)) {
+            return false;
+        }
+
+        if (onlineCacheEnabled) {
+            return trustedIds.contains(other.getId());
+        }
+
+        return storage.isTrusted(
+                this.id,
+                other.getId()
+        );
     }
 
     /**
-     * Checks whether this profile is trusted by the specified owner profile.
+     * Checks whether another profile trusts this profile.
      *
-     * <p>Typical usage:
-     * <pre>
-     *     if (breaker.isTrustedBy(claimOwner)) { ... }
-     * </pre>
+     * <p>Delegating to the owner is intentional. If the owner is online, their
+     * trust cache is used. If the owner is offline, their database-backed
+     * profile performs the lookup.</p>
      *
-     * @param owner profile that might have granted trust
-     * @return {@code true} if {@code owner} trusts this profile
+     * @param owner potential trust owner
+     * @return true when owner trusts this profile
      */
     public boolean isTrustedBy(Profile owner) {
-        if (owner == null) return false;
-        return storage().isTrusted(owner.getId(), this.getId());
+        return owner != null
+                && owner.isTrustingPlayer(this);
     }
 
     /**
-     * Returns a list of trusted player ids ({@code players.id}) for this profile.
+     * Returns all ids trusted by this profile.
      *
-     * @return unmodifiable list of trusted ids
+     * @return trusted player ids
      */
     public List<Integer> getTrustedIds() {
-        return storage().getTrustedIds(this);
+        if (onlineCacheEnabled) {
+            return List.copyOf(trustedIds);
+        }
+
+        return storage.getTrustedIds(this);
     }
 
+    // ======================================================================
+    // Ignore
+    // ======================================================================
+
     /**
-     * Adds another profile to this profile's ignore list (e.g. hide their chat).
+     * Adds another player to the ignore list.
      *
      * @param other target profile
      */
     public void addIgnoredPlayer(Profile other) {
-        if (other == null) return;
-        storage().addIgnored(this, other.getId());
+        if (!isValidRelationTarget(other)) {
+            return;
+        }
+
+        int targetId = other.getId();
+
+        if (onlineCacheEnabled && ignoredIds.contains(targetId)) {
+            return;
+        }
+
+        storage.addIgnored(this, targetId);
+
+        if (onlineCacheEnabled) {
+            ignoredIds.add(targetId);
+        }
     }
 
     /**
-     * Removes another profile from this profile's ignore list.
+     * Removes another player from the ignore list.
      *
      * @param other target profile
      */
     public void removeIgnoredPlayer(Profile other) {
-        if (other == null) return;
-        storage().removeIgnored(this, other.getId());
+        if (!isValidRelationTarget(other)) {
+            return;
+        }
+
+        int targetId = other.getId();
+
+        storage.removeIgnored(this, targetId);
+
+        if (onlineCacheEnabled) {
+            ignoredIds.remove(targetId);
+        }
     }
 
     /**
-     * Checks whether this profile is ignoring another profile.
+     * Checks whether this profile ignores another profile.
      *
      * @param other target profile
-     * @return {@code true} if this profile ignores {@code other}
+     * @return true when ignored
      */
     public boolean isIgnoringPlayer(Profile other) {
-        if (other == null) return false;
-        return storage().isIgnored(this.getId(), other.getId());
+        if (!isValidRelationTarget(other)) {
+            return false;
+        }
+
+        if (onlineCacheEnabled) {
+            return ignoredIds.contains(other.getId());
+        }
+
+        return storage.isIgnored(
+                this.id,
+                other.getId()
+        );
     }
 
     /**
-     * Checks whether this profile is being ignored by another profile.
+     * Checks whether another player ignores this profile.
      *
-     * @param other potential ignoring profile
-     * @return {@code true} if {@code other} ignores this profile
+     * @param other potential ignoring player
+     * @return true when ignored by the other profile
      */
     public boolean isIgnoredByPlayer(Profile other) {
-        if (other == null) return false;
-        return storage().isIgnored(other.getId(), this.getId());
+        return other != null
+                && other.isIgnoringPlayer(this);
     }
 
     /**
-     * Returns a list of ignored player ids ({@code players.id}) for this profile.
+     * Returns all ignored database ids.
      *
-     * @return unmodifiable list of ignored ids
+     * @return ignored player ids
      */
     public List<Integer> getIgnoredIds() {
-        return storage().getIgnoredIds(this);
+        if (onlineCacheEnabled) {
+            return List.copyOf(ignoredIds);
+        }
+
+        return storage.getIgnoredIds(this);
     }
 
-    // ---------- Settings ----------
-
     /**
-     * Retrieves a boolean setting for this profile.
+     * Checks whether another profile is valid for a persistent player-to-player
+     * relationship.
      *
-     * @param key          logical setting key
-     * @param defaultValue value returned when no setting is stored
-     * @return setting value or {@code defaultValue} if not present
+     * @param other other profile
+     * @return true when both profiles have valid distinct database ids
      */
-    public boolean getSetting(String key, boolean defaultValue) {
-        return storage().getSetting(this, key, defaultValue);
+    private boolean isValidRelationTarget(Profile other) {
+        return other != null
+                && other.getId() > 0
+                && other.getId() != this.id;
     }
 
+    // ======================================================================
+    // Settings
+    // ======================================================================
+
     /**
-     * Updates or creates a boolean setting for this profile.
+     * Retrieves a boolean setting.
      *
-     * @param key   logical setting key
-     * @param value value to store
+     * <p>Settings deliberately remain database-backed for now. The current
+     * storage API accepts a caller-supplied default value and does not expose
+     * whether a row was actually absent. Blindly caching that returned value
+     * could therefore make the first supplied default become permanently
+     * cached for the session.</p>
+     *
+     * @param key setting key
+     * @param defaultValue value when no row exists
+     * @return stored/default value
      */
-    public void setSetting(String key, boolean value) {
-        storage().setSetting(this, key, value);
+    public boolean getSetting(
+            String key,
+            boolean defaultValue
+    ) {
+        if (key == null || key.isBlank()) {
+            return defaultValue;
+        }
+
+        return storage.getSetting(
+                this,
+                key,
+                defaultValue
+        );
     }
 
     /**
-     * Toggles a boolean setting and returns the new value.
+     * Stores a boolean setting.
      *
-     * @param key          logical setting key
-     * @param defaultValue value assumed if no setting is present yet
-     * @return new toggled value
+     * @param key setting key
+     * @param value new value
      */
-    public boolean toggleSetting(String key, boolean defaultValue) {
-        boolean newValue = !getSetting(key, defaultValue);
-        setSetting(key, newValue);
-        return newValue;
+    public void setSetting(
+            String key,
+            boolean value
+    ) {
+        if (key == null || key.isBlank()) {
+            return;
+        }
+
+        storage.setSetting(this, key, value);
     }
 
-    // ---------- Stats (add/sub/set/get) ----------
+    /**
+     * Toggles a boolean setting.
+     *
+     * @param key setting key
+     * @param defaultValue value when no row currently exists
+     * @return new value
+     */
+    public boolean toggleSetting(
+            String key,
+            boolean defaultValue
+    ) {
+        boolean value =
+                !getSetting(key, defaultValue);
+
+        setSetting(key, value);
+
+        return value;
+    }
+
+    // ======================================================================
+    // Statistics
+    // ======================================================================
 
     /**
-     * Retrieves a numeric statistic from {@code players_stats}.
-     * <p>
-     * Note: {@code long} is used to match a BIGINT column and safely handle large counters.
+     * Returns a numeric statistic.
      *
-     * @param key logical stat key
-     * @return stored value, or 0 if not present
+     * <p>For online profiles the first access queries storage and subsequent
+     * accesses are served from the local stat cache.</p>
+     *
+     * <p>Offline profiles query storage directly because they are temporary
+     * objects and normally do not live long enough for caching to matter.</p>
+     *
+     * @param key statistic key
+     * @return current value
      */
     public long getStat(String key) {
-        return storage().getStat(this, key);
+        if (key == null || key.isBlank()) {
+            return 0L;
+        }
+
+        if (!onlineCacheEnabled) {
+            return storage.getStat(this, key);
+        }
+
+        Long cached = statCache.get(key);
+
+        if (cached != null) {
+            return cached;
+        }
+
+        long value = storage.getStat(this, key);
+
+        statCache.put(key, value);
+
+        return value;
     }
 
     /**
-     * Sets a numeric statistic to an exact value.
+     * Sets a statistic.
      *
-     * @param key   logical stat key
-     * @param value new stat value
+     * @param key statistic key
+     * @param value exact value
      */
-    public void setStat(String key, long value) {
-        storage().setStat(this, key, value);
+    public void setStat(
+            String key,
+            long value
+    ) {
+        if (key == null || key.isBlank()) {
+            return;
+        }
+
+        storage.setStat(this, key, value);
+
+        if (onlineCacheEnabled) {
+            statCache.put(key, value);
+        }
     }
 
     /**
-     * Adds a delta to a numeric statistic.
+     * Adds a delta to a statistic.
      *
-     * @param key   logical stat key
-     * @param delta value to add (may be negative)
+     * @param key statistic key
+     * @param delta amount to add
      */
-    public void addStat(String key, long delta) {
-        if (delta == 0L) return;
-        storage().addStat(this, key, delta);
+    public void addStat(
+            String key,
+            long delta
+    ) {
+        if (key == null
+                || key.isBlank()
+                || delta == 0L) {
+            return;
+        }
+
+        storage.addStat(this, key, delta);
+
+        if (onlineCacheEnabled) {
+            /*
+             * If the stat was already cached, update it locally.
+             *
+             * If it has never been read, leave it absent. The first future
+             * getStat() will load the already-updated database value.
+             */
+            if (statCache.containsKey(key)) {
+                statCache.merge(
+                        key,
+                        delta,
+                        Long::sum
+                );
+            }
+        }
     }
 
     /**
-     * Subtracts a delta from a numeric statistic.
+     * Subtracts a positive delta from a statistic.
      *
-     * @param key   logical stat key
-     * @param delta value to subtract (ignored if non-positive)
+     * @param key statistic key
+     * @param delta amount to subtract
      */
-    public void subStat(String key, long delta) {
-        if (delta <= 0L) return;
-        storage().addStat(this, key, -delta);
-    }
+    public void subStat(
+            String key,
+            long delta
+    ) {
+        if (delta <= 0L) {
+            return;
+        }
 
+        addStat(key, -delta);
+    }
 }

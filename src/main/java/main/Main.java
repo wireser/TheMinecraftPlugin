@@ -78,22 +78,31 @@ public class Main extends JavaPlugin
         
         databaseAccess = new DatabaseAccess(database);
 
-        ProfileStorage storage = new ProfileStorage(databaseAccess, this.getLogger());
-        profileManager = new ProfileManager(storage);
+        profileStorage = new ProfileStorage(databaseAccess, getLogger());
+        profileManager = new ProfileManager(profileStorage);
         
 		languageManager = new YamlLanguageManager(getLogger());
 
+		commandCentral = new CommandCentral(this, database, languageManager);
+		
 		moduleManager = new ModuleManager(database);
 
         // Register modules here
-        moduleManager.registerModule(new modules.economy.Main());
+        //moduleManager.registerModule(new modules.economy.Main());
 
         // Load + enable in dependency order
-        moduleManager.bootstrapModules();
-		
-		commandCentral = new CommandCentral(this, database, languageManager);
-		
 		registerModules();
+		moduleManager.bootstrapModules();
+		
+		getServer().getPluginManager().registerEvents(
+		        new listeners.player.PlayerJoin(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.player.PlayerQuit(),
+		        this
+		);
 		
 	}
 	

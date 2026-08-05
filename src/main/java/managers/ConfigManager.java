@@ -55,8 +55,17 @@ public class ConfigManager {
         }
 
         configFile = new File(plugin.getDataFolder(), fileName + ".yml");
+
+        // NEW: ensure parent folders exist (e.g. modules/economy/)
+        File parent = configFile.getParentFile();
+        if (parent != null && !parent.exists()) {
+            if (!parent.mkdirs()) {
+                logger.severe(LOG_PREFIX + "Could not create directories for " + configFile.getPath());
+                return;
+            }
+        }
+
         if (!configFile.exists()) {
-            // Try to copy default from JAR, otherwise create empty file
             if (plugin.getResource(fileName + ".yml") != null) {
                 plugin.saveResource(fileName + ".yml", false);
                 logger.info(LOG_PREFIX + "Created " + fileName + ".yml from plugin defaults.");
@@ -68,6 +77,7 @@ public class ConfigManager {
                 } catch (IOException e) {
                     logger.severe(LOG_PREFIX + "Could not create " + fileName + ".yml");
                     e.printStackTrace();
+                    return;
                 }
             }
         }

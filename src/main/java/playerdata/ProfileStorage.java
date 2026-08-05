@@ -65,6 +65,165 @@ public final class ProfileStorage {
         return true;
     }
 
+    /**
+     * Resolves or creates the permane:contentReference[oaicite:1]{index=1}player.
+     *
+     * <p>The {@code players.id} column is the plugin's canonical internal player
+     * identifier. UUID is used here only to locate the player's row in the
+     * {@code players} table. Once the id has been resolved, all other
+     * player-related database operations should use that integer id.</p>
+     *
+     * <p>If the UUID already exists in the database, the existing
+     * {@code players.id} is returned. The stored Minecraft username is also
+     * synchronized with the current name supplied by Bukkit, because Minecraft
+     * usernames may change while UUIDs remain stable.</p>
+     *
+     * <p>If the UUID does not yet exist, a new row is inserted into
+     * {@code players} using the UUID and current Minecraft username. The newly
+     * generated {@code players.id} is then resolved and returned.</p>
+     *
+     * <p>This method never intentionally returns a partially resolved player.
+     * A return value of {@code 0} means that the player could not be resolved or
+     * created and a {@link Profile} should therefore not be constructed.</p>
+     *
+     * @param uuid Mojang/Bukkit UUID of the player
+     * @param name current Minecraft username
+     * @return valid {@code players.id}, or {@code 0} if resolution/creation fails
+     */
+    public int getOrCreatePlayerId(UUID uuid, String name) {
+
+        // A usable database player must always have both a UUID and a name.
+        if (uuid == null || name == null || name.isBlank()) {
+            logger.warning(
+                    "ProfileStorage: cannot resolve/create player id because UUID or name is invalid."
+            );
+            return 0;
+        }
+
+        /*
+         * First attempt to resolve an existing player.
+         *
+         * findIdByUuid(UUID) already exists in ProfileStorage and returns
+         * players.id or null when no matching row exists.
+         */
+        Integer existingId = findIdByUuid(uuid);
+
+        if (existingId != null && existingId > 0) {
+
+            /*
+             * The UUID identifies the Minecraft account permanently, but the
+             * username can change.
+             *
+             * Keep players.name synchronized whenever the player joins.
+             */
+            String storedName = getIgn(existingId);
+
+            if (storedName == null || !storedName.equals(name)) {
+                try {
+                    db.update(
+                            "players",
+                            List.of("name"),
+                            List.of(name),
+                            "id = ?",
+                            List.of(existingId)
+                    );
+
+                    logger.info(
+                            "Updated player name for playerId="
+                            + existingId
+                            + ": "
+                            + storedName
+                            + " -> "
+                            + name
+                    );
+
+                } catch (SQLException e) {
+                    /*
+                     * Failing to update the name does not invalidate the player's
+                     * existing database id, so we still return existingId below.
+                     */
+                    logger.severe(
+                            "Failed to update player name for playerId="
+                            + existingId
+                            + ": "
+                            + e.getMessage()
+                    );
+
+                    e.printStackTrace();
+                }
+            }
+
+            return existingId;
+        }
+
+        /*
+         * No row exists for this UUID.
+         *
+         * This is therefore the player's first registration in our database.
+         *
+         * Only UUID and name are required here. Other players-table columns
+         * should either have database defaults or allow NULL.
+         */
+        try {
+            db.insert(
+                    "players",
+                    List.of(
+                            "uuid",
+                            "name"
+                    ),
+                    List.of(
+                            uuid.toString(),
+                            name
+                    )
+            );
+
+        } catch (SQLException e) {
+            logger.severe(
+                    "Failed to create players row for "
+                    + name
+                    + " ("
+                    + uuid
+                    + "): "
+                    + e.getMessage()
+            );
+
+            e.printStackTrace();
+
+            return 0;
+        }
+
+        /*
+         * DatabaseAccess.insert() does not currently give ProfileStorage the
+         * generated AUTO_INCREMENT id directly.
+         *
+         * Therefore, after inserting the row, resolve players.id using the UUID.
+         *
+         * This extra lookup happens only when the player is first registered.
+         */
+        Integer createdId = findIdByUuid(uuid);
+
+        if (createdId == null || createdId <= 0) {
+            logger.severe(
+                    "Created players row for "
+                    + name
+                    + " ("
+                    + uuid
+                    + "), but could not resolve its players.id afterwards."
+            );
+
+            return 0;
+        }
+
+        logger.info(
+                "Created player database record: "
+                + name
+                + " -> playerId="
+                + createdId
+        );
+
+        return createdId;
+    }
+    
     // ======================================================================
     // Locations
     // ======================================================================
@@ -1082,44 +1241,229 @@ public final class ProfileStorage {
         return (id != null) ? id : 0;
     }
 
- // inside ProfileStorage
-
     /**
-     * Returns the stored group key/name from the players table.
-     * Example: "default", "vip", "mod".
+     * Updates the stored nickname for a player.
      *
-     * @param id players.id
-     * @return group key, or null if not set
+     * @param profile profile whose nickname should be changed
+     * @param nick new nickname, or {@code null} to clear it
      */
-    public String getGroupKey(int id) {
-        if (id <= 0) return null;
+    public void setNick(Profile profile, String nick) {
+        if (!ensureValidId(profile, "setNick")) {
+            return;
+        }
+
         try {
-            return db.getString(
+            db.update(
                     "players",
-                    "group_key", // adjust to your actual column name
+                    List.of("nick"),
+
+                    /*
+                     * Collections.singletonList() is intentional.
+                     *
+                     * List.of(null) throws NullPointerException, while nick may
+                     * legitimately be null when clearing the nickname.
+                     */
+                    Collections.singletonList(nick),
+
                     "id = ?",
-                    List.of(id)
+                    List.of(profile.getId())
             );
         } catch (SQLException e) {
-            logger.severe("Failed to load group_key for id=" + id + ": " + e.getMessage());
-            e.printStackTrace();
-            return null;
-        }
-    }
+            logger.severe(
+                    "Failed to update nick for playerId="
+                    + profile.getId()
+                    + ": "
+                    + e.getMessage()
+            );
 
-    /**
-     * Convenience helper: loads the group key for a given UUID.
-     *
-     * @param uuid Mojang UUID
-     * @return group key, or null if unknown
-     */
-    public String getGroupKeyByUuid(UUID uuid) {
-        Integer id = findIdByUuid(uuid);
-        if (id == null || id <= 0) {
-            return null;
+            e.printStackTrace();
         }
-        return getGroupKey(id);
     }
+    
+ // inside ProfileStorage
+
+ // ======================================================================
+ // Group / rank
+ // ======================================================================
+
+ /**
+  * Default player group.
+  */
+ public static final int GROUP_DEFAULT = 0;
+
+ /**
+  * Recognized player group.
+  */
+ public static final int GROUP_RECOGNIZED = 1;
+
+ /**
+  * Donator group.
+  */
+ public static final int GROUP_DONATOR = 2;
+
+ /**
+  * Moderator group.
+  */
+ public static final int GROUP_MODERATOR = 3;
+
+ /**
+  * Administrator group.
+  */
+ public static final int GROUP_ADMIN = 4;
+
+ /**
+  * Developer group.
+  */
+ public static final int GROUP_DEV = 5;
+
+ /**
+  * Superuser group.
+  */
+ public static final int GROUP_SUPERUSER = 6;
+
+	 /**
+	  * Loads the player's numeric permission group from {@code players.group}.
+	  *
+	  * <p>The group values currently have the following meaning:</p>
+	  *
+	  * <ul>
+	  *     <li>0 - Default</li>
+	  *     <li>1 - Recognized player</li>
+	  *     <li>2 - Donator</li>
+	  *     <li>3 - Moderator</li>
+	  *     <li>4 - Admin</li>
+	  *     <li>5 - Developer</li>
+	  *     <li>6 - Superuser</li>
+	  * </ul>
+	  *
+	  * <p>The column is escaped as {@code `group`} because {@code GROUP} is an
+	  * SQL keyword.</p>
+	  *
+	  * @param playerId database primary key from {@code players.id}
+	  * @return stored group id, or {@link #GROUP_DEFAULT} if the player does not
+	  *         exist or the value could not be loaded
+	  */
+	 public int getGroupId(int playerId) {
+	     if (playerId <= 0) {
+	         return GROUP_DEFAULT;
+	     }
+	
+	     try {
+	         Integer groupId = db.getInt(
+	                 "players",
+	                 "`group`",
+	                 "id = ?",
+	                 List.of(playerId)
+	         );
+	
+	         return groupId != null
+	                 ? groupId
+	                 : GROUP_DEFAULT;
+	
+	     } catch (SQLException e) {
+	         logger.severe(
+	                 "Failed to load group for playerId="
+	                 + playerId
+	                 + ": "
+	                 + e.getMessage()
+	         );
+	
+	         e.printStackTrace();
+	
+	         return GROUP_DEFAULT;
+	     }
+	 }
+
+	 /**
+	  * Loads the numeric group for a player identified by UUID.
+	  *
+	  * <p>The UUID is first resolved to the permanent {@code players.id}; the
+	  * actual group lookup then uses that player id.</p>
+	  *
+	  * @param uuid Mojang UUID
+	  * @return stored group id, or {@link #GROUP_DEFAULT} if the UUID is unknown
+	  */
+	 public int getGroupIdByUuid(UUID uuid) {
+	     Integer playerId = findIdByUuid(uuid);
+	
+	     if (playerId == null || playerId <= 0) {
+	         return GROUP_DEFAULT;
+	     }
+	
+	     return getGroupId(playerId);
+	 }
+	
+	 /**
+	  * Updates the player's numeric permission group.
+	  *
+	  * <p>Only group ids in the range {@code 0-6} are currently valid.</p>
+	  *
+	  * @param playerId database primary key from {@code players.id}
+	  * @param groupId new group id
+	  * @return {@code true} if the update was attempted successfully,
+	  *         otherwise {@code false}
+	  */
+	 public boolean setGroupId(int playerId, int groupId) {
+	     if (playerId <= 0) {
+	         logger.warning(
+	                 "ProfileStorage: attempted setGroupId with invalid playerId="
+	                 + playerId
+	         );
+	         return false;
+	     }
+	
+	     if (groupId < GROUP_DEFAULT || groupId > GROUP_SUPERUSER) {
+	         logger.warning(
+	                 "ProfileStorage: attempted to assign invalid groupId="
+	                 + groupId
+	                 + " to playerId="
+	                 + playerId
+	         );
+	         return false;
+	     }
+	
+	     try {
+	         db.update(
+	                 "players",
+	                 List.of("`group`"),
+	                 List.of(groupId),
+	                 "id = ?",
+	                 List.of(playerId)
+	         );
+	
+	         return true;
+	
+	     } catch (SQLException e) {
+	         logger.severe(
+	                 "Failed to update group for playerId="
+	                 + playerId
+	                 + " to groupId="
+	                 + groupId
+	                 + ": "
+	                 + e.getMessage()
+	         );
+	
+	         e.printStackTrace();
+	
+	         return false;
+	     }
+	 }
+	
+	 /**
+	  * Convenience overload for changing the group of a resolved profile.
+	  *
+	  * @param profile profile whose group should be changed
+	  * @param groupId new group id
+	  * @return {@code true} if the update was attempted successfully,
+	  *         otherwise {@code false}
+	  */
+	 public boolean setGroupId(Profile profile, int groupId) {
+	     if (!ensureValidId(profile, "setGroupId")) {
+	         return false;
+	     }
+	
+	     return setGroupId(profile.getId(), groupId);
+	 }
 
 
 	/**

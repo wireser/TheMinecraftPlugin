@@ -58,7 +58,7 @@ Database:
   # Default: true.
   # Warning: If you disable this and the server uses caching_sha2_password
   #          without a TLS connection, authentication might fail.
-  allowPublicKeyRetrieval: true
+  allowPublicKeyRetrieval: false
 
   # ---------------------------------------------------------------------------
   # SSL / TLS options
@@ -96,7 +96,7 @@ Database:
     # Recommended: "utf8mb4" (full Unicode, including emojis).
     # Warning: Changing this without matching the server/database charset can cause
     #          strange character issues.
-    Charset: "UTF-8"
+    Charset: "utf8mb4"
 
   # ---------------------------------------------------------------------------
   # Connection pool (HikariCP)
@@ -150,7 +150,7 @@ Database:
     # 20 ticks = 1 second, so 100 ticks ≈ 5 seconds.
     # Recommended:
     #   - 100–200 (5–10 seconds) for most servers.
-    CheckIntervalTicks: 100
+    CheckIntervalTicks: 200
 
     # How many consecutive failed health checks are allowed before "fail-fast"
     # behavior is triggered (if enabled).
