@@ -631,7 +631,7 @@ public final class Profile {
             return true;
         }
 
-        return group != null && group.hasCommand(node);
+        return group != null && group.canUseCommand(node);
     }
 
     // ======================================================================

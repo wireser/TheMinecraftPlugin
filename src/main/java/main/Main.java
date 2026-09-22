@@ -4,6 +4,10 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.config.Configurator;
 import command.CommandCentral;
@@ -13,6 +17,7 @@ import managers.ConfigManager;
 import managers.LanguageManager;
 import managers.ModuleManager;
 import managers.YamlLanguageManager;
+import modules.LocationsModule;
 import playerdata.Profile;
 import playerdata.ProfileManager;
 import playerdata.ProfileStorage;
@@ -44,7 +49,7 @@ public class Main extends JavaPlugin
 	
 	private LanguageManager languageManager;
 	
-	private ConfigManager mainConfig;
+	private ConfigManager configMain;
 	
 	private DatabaseAccess databaseAccess;
 
@@ -68,10 +73,10 @@ public class Main extends JavaPlugin
 		instance = this;
 
 		// Config
-        mainConfig = new ConfigManager(this, "config");
-        mainConfig.setup();
+        configMain = new ConfigManager(this, "config");
+        configMain.setup();
 
-        database = new Database(this, mainConfig);
+        database = new Database(this, configMain);
         if (!database.initializeAndStartWatchdog()) {
             return; // database already logged and disabled the plugin
         }
@@ -81,14 +86,26 @@ public class Main extends JavaPlugin
         profileStorage = new ProfileStorage(databaseAccess, getLogger());
         profileManager = new ProfileManager(profileStorage);
         
-		languageManager = new YamlLanguageManager(getLogger());
+        Path languageFile = getDataFolder()
+                .toPath()
+                .resolve("lang.yml");
+
+        if (!Files.exists(languageFile)) {
+            saveResource("lang.yml", false);
+        }
+
+        YamlLanguageManager yamlLanguageManager =
+                new YamlLanguageManager(getLogger());
+
+        yamlLanguageManager.load(languageFile);
+        languageManager = yamlLanguageManager;
 
 		commandCentral = new CommandCentral(this, database, languageManager);
 		
 		moduleManager = new ModuleManager(database);
 
         // Register modules here
-        //moduleManager.registerModule(new modules.economy.Main());
+		moduleManager.registerModule(new LocationsModule());
 
         // Load + enable in dependency order
 		registerModules();
@@ -175,7 +192,7 @@ public class Main extends JavaPlugin
 	}
 
 	public ConfigManager getMainConfig() {
-        return mainConfig;
+        return configMain;
     }
 
 	public LanguageManager getLanguageManager() {
@@ -231,7 +248,7 @@ public class Main extends JavaPlugin
 		// moduleManager.registerModule(new EmptyModule());
 	}
 
-    private void muteHikariLoggers() {
+    /*private void muteHikariLoggers() {
         try {
             // Base package logger
             Configurator.setLevel("com.wireser.minecraft.shaded.hikari", Level.OFF);
@@ -242,8 +259,22 @@ public class Main extends JavaPlugin
         } catch (Throwable t) {
             getLogger().warning("Could not adjust Hikari logger levels via Log4j2. This only affects cosmetic startup logs.");
         }
-    }
+    }*/
 
+    private void muteHikariLoggers() {
+        try {
+            Configurator.setLevel(
+                    "com.wireser.minecraft.shaded.hikari",
+                    Level.WARN
+            );
+        } catch (RuntimeException | LinkageError exception) {
+            getLogger().warning(
+                    "Could not adjust Hikari logging. "
+                    + "This only affects cosmetic startup messages."
+            );
+        }
+    }
+    
 	public DatabaseAccess getDatabaseAccess() {
 		return databaseAccess;
 	}

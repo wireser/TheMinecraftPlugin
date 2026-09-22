@@ -1,7 +1,7 @@
 package command;
 
 import enums.Currency;
-import model.Group;
+import enums.GroupType;
 
 import java.util.*;
 
@@ -74,10 +74,12 @@ public final class CommandRegistry {
     private final String moduleName;
 
     /**
-     * Optional group that this command is associated with.
-     * May be {@code null} if it is not bound to a specific group.
+     * Lowest group allowed to discover and execute this command.
+     *
+     * <p>This value is required and can never be {@code null} after the
+     * command has been built.</p>
      */
-    private final Group group;
+    private final GroupType minimumGroup;
 
     /**
      * Command execution logic.
@@ -169,7 +171,7 @@ public final class CommandRegistry {
             this.moduleName = "global";
         }
 
-        this.group = builder.group;
+        this.minimumGroup = builder.minimumGroup;
         this.executor = builder.executor;
         this.enabled = builder.enabled;
     }
@@ -247,10 +249,10 @@ public final class CommandRegistry {
     }
 
     /**
-     * @return The group associated with this command, or {@code null} if none.
+     * Returns the lowest group allowed to discover and execute this command.
      */
-    public Group getGroup() {
-        return group;
+    public GroupType getMinimumGroup() {
+        return minimumGroup;
     }
 
     /**
@@ -333,11 +335,12 @@ public final class CommandRegistry {
     @Override
     public String toString() {
         return "CommandRegistry{" +
-               "label='" + label + '\'' +
-               ", aliases=" + aliases +
-               ", moduleName='" + moduleName + '\'' +
-               ", enabled=" + enabled +
-               '}';
+            "label='" + label + '\'' +
+            ", aliases=" + aliases +
+            ", moduleName='" + moduleName + '\'' +
+            ", minimumGroup=" + minimumGroup +
+            ", enabled=" + enabled +
+            '}';
     }
 
     // ===================== Builder =====================
@@ -355,7 +358,7 @@ public final class CommandRegistry {
      *     .cooldownSeconds(10)
      *     .permissionNode("tmp.spawn.use")
      *     .moduleName("Core")
-     *     .group(defaultGroup)
+     *     .minimumGroup(GroupType.PLAYER)
      *     .build();
      * </pre>
      */
@@ -373,7 +376,7 @@ public final class CommandRegistry {
         private int cooldownSeconds = 0;
         private String permissionNode = null; // Bukkit-style permission node
         private String moduleName = "global";
-        private Group group = null;
+        private GroupType minimumGroup;
         private boolean enabled = true;
         private TabHandler tabHandler = null;
 
@@ -469,13 +472,17 @@ public final class CommandRegistry {
         }
 
         /**
-         * Sets the associated group that can access this command by default.
+         * Sets the lowest group allowed to discover and execute this command.
          *
-         * @param group The group instance (may be {@code null}).
-         * @return This builder instance.
+         * @param minimumGroup lowest permitted group in the inheritance hierarchy
+         * @return this builder
          */
-        public Builder group(Group group) {
-            this.group = group;
+        public Builder minimumGroup(GroupType minimumGroup) {
+            this.minimumGroup = Objects.requireNonNull(
+                minimumGroup,
+                "Minimum command group cannot be null."
+            );
+
             return this;
         }
 
@@ -522,6 +529,14 @@ public final class CommandRegistry {
          * @throws IllegalArgumentException if required fields are invalid.
          */
         public CommandRegistry build() {
+            if (minimumGroup == null) {
+                throw new IllegalStateException(
+                    "Command /"
+                    + label
+                    + " does not declare a minimum group."
+                );
+            }
+
             return new CommandRegistry(this);
         }
     }
