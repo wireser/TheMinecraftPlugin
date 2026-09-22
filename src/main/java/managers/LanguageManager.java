@@ -1,70 +1,48 @@
 package managers;
 
-import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.NotNull;
 
+import net.kyori.adventure.text.Component;
+
 /**
- * Per-scope language accessor (e.g. per module).
- *
- * Implementations are expected to:
- * - load messages from configuration (YAML, etc.)
- * - cache them in memory
- * - return Components with colors already parsed
- *
- * Keys are treated as case-insensitive.
+ * Provides access to language messages cached in memory.
  */
 public interface LanguageManager {
 
     /**
-     * Maximum allowed length of a single message.
-     * Longer values are treated as invalid and replaced by a placeholder.
+     * Maximum permitted length of one language message.
      */
     int MAX_MESSAGE_LENGTH = 512;
 
     /**
-     * Gets a localized message as a Component by key.
-     *
-     * @param key language key (e.g. "error_warp_not_found")
-     * @return localized Component; never {@code null}.
-     *         Missing/invalid keys return a red %KEY% placeholder.
+     * Reloads all language data from its configured sources.
      */
-    @NotNull
-    Component get(@NotNull String key);
+    void reload();
 
     /**
-     * Gets a localized message as a Component and applies positional placeholders.
-     *
-     * Placeholders:
-     *   %1, %2, ..., %N
-     *
-     * Example:
-     *   lang.yml: error_warp_not_found: "&7Error: &cWe cant find warp &f%1&7."
-     *   lang.get("error_warp_not_found", warpName);
-     *
-     * @param key       language key
-     * @param arguments positional arguments (%1..%N)
-     * @return localized Component; never {@code null}
-     */
-    @NotNull
-    Component get(@NotNull String key, Object... arguments);
-
-    /**
-     * Plain-text version of the message with colors stripped.
+     * Returns a formatted language message as an Adventure component.
      *
      * @param key language key
-     * @return plain text; never {@code null}
+     * @param arguments values replacing %1, %2, and so on
+     * @return resolved message
      */
     @NotNull
-    String getString(@NotNull String key);
+    Component line(
+            @NotNull String key,
+            Object... arguments
+    );
 
     /**
-     * Plain-text version with positional arguments applied.
+     * Returns a formatted language message without formatting.
      *
-     * @param key       language key
-     * @param arguments positional arguments
-     * @return plain text; never {@code null}
+     * @param key language key
+     * @param arguments values replacing %1, %2, and so on
+     * @return resolved plain-text message
      */
     @NotNull
-    String getString(@NotNull String key, Object... arguments);
+    String plain(
+            @NotNull String key,
+            Object... arguments
+    );
 
 }

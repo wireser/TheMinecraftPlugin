@@ -4,7 +4,6 @@ import enums.Currency;
 import main.Main;
 import managers.LanguageManager;
 import model.Group;
-import net.kyori.adventure.text.format.NamedTextColor;
 import playerdata.Profile;
 
 import org.bukkit.command.Command;
@@ -18,45 +17,6 @@ import java.util.logging.Level;
  * Handles registration, execution, permissions, costs, and cooldowns.
  */
 public final class CommandCentral {
-
-	// Message keys + fallbacks
-
-	// unknown command
-	private static final String KEY_UNKNOWN_COMMAND      = "command.unknown";
-	private static final String FMT_UNKNOWN_COMMAND      = "Unknown command: %s";
-
-	// generic perms
-	private static final String KEY_NO_PERMISSION        = "command.no_permission";
-	private static final String MSG_NO_PERMISSION        = "You don't have permission for this command!";
-
-	// subcommand perms
-	private static final String KEY_NO_SUB_PERMISSION    = "command.no_sub_permission";
-	private static final String MSG_NO_SUB_PERMISSION    = "You don't have permission for this subcommand!";
-
-	// disabled / module
-	private static final String KEY_MODULE_DISABLED      = "command.module_disabled";
-	private static final String FMT_MODULE_DISABLED      = "Error: The module containing the %s command has been disabled.";
-
-	private static final String KEY_COMMAND_DISABLED     = "command.disabled";
-	private static final String FMT_COMMAND_DISABLED     = "Error: The %s command is currently disabled.";
-
-	// costs
-	private static final String KEY_INSUFFICIENT_FUNDS   = "command.insufficient_funds";
-	private static final String FMT_INSUFFICIENT_FUNDS   = "You need %s %s for this!";
-
-	// cooldown
-	private static final String KEY_COOLDOWN_ACTIVE      = "command.cooldown";
-	private static final String FMT_COOLDOWN_ACTIVE      = "Command is on cooldown! Remaining: %.1fs";
-
-	// syntax & errors
-	private static final String KEY_SYNTAX_USAGE         = "command.syntax.usage";
-	private static final String FMT_SYNTAX_USAGE         = "Usage: %s";
-
-	private static final String KEY_COMMAND_ERROR        = "command.error.prefix";
-	private static final String FMT_COMMAND_ERROR        = "Error: %s";
-
-	private static final String KEY_UNAVAILABLE          = "command.unavailable";
-	private static final String MSG_UNAVAILABLE          = "This command is currently unavailable.";
 	
 	private final Map<String, CommandRegistry> commands = new HashMap<>();
 	private final Map<String, String> aliases = new HashMap<>();
@@ -193,67 +153,43 @@ public final class CommandCentral {
 				: (bukkitCmd != null ? bukkitCmd.getName() : null);
 
 		if (usedLabel == null || usedLabel.isEmpty()) {
-		    String msg = language.getString(
-		        KEY_UNKNOWN_COMMAND,
-		        FMT_UNKNOWN_COMMAND,
-		        ""
-		    );
-		    player.msg(NamedTextColor.RED, msg);
+		    player.sendMessage(language.line("command.unknown", ""));
 		    return false;
 		}
 
 		CommandRegistry cmd = getCommand(usedLabel).orElse(null);
 		if (cmd == null) {
-		    String msg = language.getString(
-		        KEY_UNKNOWN_COMMAND,
-		        FMT_UNKNOWN_COMMAND,
-		        usedLabel
-		    );
-		    player.msg(NamedTextColor.RED, msg);
+		    player.sendMessage(language.line("command.unknown", usedLabel));
 		    return false;
 		}
 
 		if (!isCommandVisible(player, cmd)) {
 		    // Intentionally pretend the command does not exist for this group
-		    String msg = language.getString(
-		        KEY_UNKNOWN_COMMAND,
-		        FMT_UNKNOWN_COMMAND,
-		        usedLabel
-		    );
-		    player.msg(NamedTextColor.RED, msg);
+		    player.sendMessage(language.line("command.unknown", usedLabel));
 		    return true;
 		}
 
 		// Module check
 		if (!isModuleEnabled(cmd.getModuleName())) {
-			player.msg(
-				    NamedTextColor.RED,
-				    language.getString(
-				        KEY_MODULE_DISABLED,
-				        FMT_MODULE_DISABLED,
-				        usedLabel.toLowerCase(Locale.ROOT)
-				    )
-				);
+			player.sendMessage(language.line(
+					"command.module_disabled",
+					usedLabel.toLowerCase(Locale.ROOT)
+			));
 			return true;
 		}
 
 		// Command enabled check
 		if (!cmd.isEnabled()) {
-			player.msg(
-				    NamedTextColor.RED,
-				    language.getString(
-				        KEY_COMMAND_DISABLED,
-				        FMT_COMMAND_DISABLED,
-				        usedLabel.toLowerCase(Locale.ROOT)
-				    )
-				);
+			player.sendMessage(language.line(
+					"command.disabled",
+					usedLabel.toLowerCase(Locale.ROOT)
+			));
 			return true;
 		}
 
 		// Permission check
 		if (cmd.hasPermissionNode() && !player.hasPermission(cmd.getPermissionNode())) {
-			String noPerm = language.getString(KEY_NO_PERMISSION, MSG_NO_PERMISSION);
-			player.msg(NamedTextColor.RED, noPerm);
+			player.sendMessage(language.line("command.no_permission"));
 			return true;
 		}
 
@@ -263,29 +199,21 @@ public final class CommandCentral {
 		    double required  = getEffectiveCost(cmd);
 		    String formatted = formatCurrency(required, currency);
 
-		    player.msg(
-		        NamedTextColor.RED,
-		        language.getString(
-		            KEY_INSUFFICIENT_FUNDS,
-		            FMT_INSUFFICIENT_FUNDS,
-		            formatted,
-		            currency.name()
-		        )
-		    );
+		    player.sendMessage(language.line(
+		        "command.insufficient_funds",
+		        formatted,
+		        currency.name()
+		    ));
 		    return true;
 		}
 
 		// Cooldown
 		if (cmd.getCooldownSeconds() > 0 && !cooldownManager.checkCooldown(player.getUuid(), cmd)) {
 			double remaining = cooldownManager.getRemaining(player.getUuid(), cmd);
-			player.msg(
-			    NamedTextColor.RED,
-			    language.getString(
-			        KEY_COOLDOWN_ACTIVE,
-			        FMT_COOLDOWN_ACTIVE,
-			        remaining
-			    )
-			);
+			player.sendMessage(language.line(
+				"command.cooldown",
+				String.format(Locale.ROOT, "%.1f", remaining)
+			));
 			return true;
 		}
 
@@ -318,8 +246,7 @@ public final class CommandCentral {
 		        e
 		    );
 
-		    String msg = language.getString(KEY_UNAVAILABLE, MSG_UNAVAILABLE);
-		    player.msg(NamedTextColor.RED, msg);
+		    player.sendMessage(language.line("command.unavailable"));
 		    return true;
 		}
 		
@@ -492,57 +419,23 @@ public final class CommandCentral {
 	        logCommandException(cmd, e);
 	    }
 
-	    switch (type) {
-	        case SYNTAX_ERROR: {
-	            // "Error: <message>"
-	            String errorPrefix = language.getString(
-	                KEY_COMMAND_ERROR,
-	                FMT_COMMAND_ERROR,
-	                e.getMessage()
-	            );
-	            player.msg(NamedTextColor.RED, errorPrefix);
+	    if (type == CommandExceptionType.SYNTAX_ERROR) {
+	        player.sendMessage(language.line(
+	            type.getLanguageKey(),
+	            e.getMessage()
+	        ));
 
-	            // Optional usage line
-	            if (cmd.getSyntax() != null && !cmd.getSyntax().isEmpty()) {
-	                String usage = language.getString(
-	                    KEY_SYNTAX_USAGE,
-	                    FMT_SYNTAX_USAGE,
-	                    cmd.getSyntax()
-	                );
-	                player.msg(NamedTextColor.RED, usage);
-	            }
-	            break;
+	        if (cmd.getSyntax() != null && !cmd.getSyntax().isEmpty()) {
+	            player.sendMessage(language.line(
+	                "command.syntax.usage",
+	                cmd.getSyntax()
+	            ));
 	        }
 
-	        case PERMISSION_ERROR: {
-	            String noPerm = language.getString(KEY_NO_PERMISSION, MSG_NO_PERMISSION);
-	            player.msg(NamedTextColor.RED, noPerm);
-	            break;
-	        }
-
-	        case SUBCOMMAND_PERMISSION: {
-	            String noSubPerm = language.getString(KEY_NO_SUB_PERMISSION, MSG_NO_SUB_PERMISSION);
-	            player.msg(NamedTextColor.RED, noSubPerm);
-	            break;
-	        }
-
-	        case UNAVAILABLE_ERROR: {
-	            String unavailable = language.getString(KEY_UNAVAILABLE, MSG_UNAVAILABLE);
-	            player.msg(NamedTextColor.RED, unavailable);
-	            break;
-	        }
-
-	        case GENERAL_ERROR:
-	        default: {
-	            String msg = language.getString(
-	                KEY_COMMAND_ERROR,
-	                FMT_COMMAND_ERROR,
-	                e.getMessage()
-	            );
-	            player.msg(NamedTextColor.RED, msg);
-	            break;
-	        }
+	        return;
 	    }
+
+	    player.sendMessage(language.line(type.getLanguageKey()));
 	}
 	
 }

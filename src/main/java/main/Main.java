@@ -94,11 +94,7 @@ public class Main extends JavaPlugin
             saveResource("lang.yml", false);
         }
 
-        YamlLanguageManager yamlLanguageManager =
-                new YamlLanguageManager(getLogger());
-
-        yamlLanguageManager.load(languageFile);
-        languageManager = yamlLanguageManager;
+        languageManager = new YamlLanguageManager(this);
 
 		commandCentral = new CommandCentral(this, database, languageManager);
 		
