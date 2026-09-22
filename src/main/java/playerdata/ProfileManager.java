@@ -11,6 +11,7 @@ import java.util.UUID;
 
 import org.bukkit.entity.Player;
 
+import enums.GroupType;
 import enums.Perm;
 import model.Group;
 
@@ -164,7 +165,7 @@ public final class ProfileManager {
          * Group resolution is intentionally left nullable until the group/rank
          * system is connected to ProfileManager.
          */
-        Group group = null;
+        Group group = storage.loadPlayerGroupType(playerId).getGroup();
 
         /*
          * Construct the fully identified profile.
@@ -421,7 +422,7 @@ public final class ProfileManager {
         String ign = storage.getIgn(id);
         String nick = storage.getNick(id);
 
-        Group group = null;
+        Group group = storage.loadPlayerGroupType(id).getGroup();
 
         return buildProfile(
                 id,
@@ -451,7 +452,7 @@ public final class ProfileManager {
         String ign = storage.getIgn(id);
         String nick = storage.getNick(id);
 
-        Group group = null;
+        Group group = storage.loadPlayerGroupType(id).getGroup();
 
         return buildProfile(
                 id,

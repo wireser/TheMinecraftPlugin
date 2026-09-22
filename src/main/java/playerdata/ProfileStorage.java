@@ -15,6 +15,7 @@ import org.bukkit.World;
 
 import database.DatabaseAccess;
 import enums.Currency;
+import enums.GroupType;
 import enums.Perm;
 
 /**
@@ -66,7 +67,7 @@ public final class ProfileStorage {
     }
 
     /**
-     * Resolves or creates the permane:contentReference[oaicite:1]{index=1}player.
+     * Resolves or creates the permanent database identity for a player.
      *
      * <p>The {@code players.id} column is the plugin's canonical internal player
      * identifier. UUID is used here only to locate the player's row in the
@@ -1280,190 +1281,195 @@ public final class ProfileStorage {
         }
     }
     
- // inside ProfileStorage
+    // ======================================================================
+    // Player groups
+    // ======================================================================
 
- // ======================================================================
- // Group / rank
- // ======================================================================
 
- /**
-  * Default player group.
-  */
- public static final int GROUP_DEFAULT = 0;
+    /**
+     * Loads the player's group type from {@code players.group_id}.
+     *
+     * <p>The database stores the stable numeric identifier defined by
+     * {@link GroupType#getDatabaseId()}. The identifier is resolved into the
+     * canonical enum value before leaving the persistence layer.</p>
+     *
+     * <p>No fallback is applied. A missing or unknown group ID represents
+     * invalid persistent data and must not silently alter access rights.</p>
+     *
+     * @param playerId permanent primary key from {@code players.id}
+     * @return canonical group type stored for the player
+     * @throws IllegalArgumentException if {@code playerId} is not positive
+     * @throws IllegalStateException if the group cannot be loaded or resolved
+     */
+    public GroupType loadPlayerGroupType(int playerId) {
+        if (playerId <= 0) {
+            throw new IllegalArgumentException(
+                    "Cannot load group for invalid player ID: " + playerId
+            );
+        }
 
- /**
-  * Recognized player group.
-  */
- public static final int GROUP_RECOGNIZED = 1;
+        final Integer storedGroupId;
 
- /**
-  * Donator group.
-  */
- public static final int GROUP_DONATOR = 2;
+        try {
+            storedGroupId = db.getInt(
+                    "players",
+                    "group_id",
+                    "id = ?",
+                    List.of(playerId)
+            );
+        } catch (SQLException exception) {
+            throw new IllegalStateException(
+                    "Failed to load group_id for playerId=" + playerId,
+                    exception
+            );
+        }
 
- /**
-  * Moderator group.
-  */
- public static final int GROUP_MODERATOR = 3;
+        if (storedGroupId == null) {
+            throw new IllegalStateException(
+                    "Player row has no group_id for playerId=" + playerId
+            );
+        }
 
- /**
-  * Administrator group.
-  */
- public static final int GROUP_ADMIN = 4;
+        try {
+            return GroupType.requireByDatabaseId(storedGroupId);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException(
+                    "Player row contains unknown group_id="
+                            + storedGroupId
+                            + " for playerId="
+                            + playerId,
+                    exception
+            );
+        }
+    }
 
- /**
-  * Developer group.
-  */
- public static final int GROUP_DEV = 5;
 
- /**
-  * Superuser group.
-  */
- public static final int GROUP_SUPERUSER = 6;
+    /**
+     * Loads the group type for a player UUID.
+     *
+     * <p>The UUID is resolved to the permanent numeric player ID before the
+     * group is loaded.</p>
+     *
+     * @param playerUuid permanent Mojang UUID
+     * @return canonical group type stored for the player
+     * @throws IllegalArgumentException if {@code playerUuid} is {@code null}
+     * @throws IllegalStateException if the player or group cannot be resolved
+     */
+    public GroupType loadPlayerGroupType(UUID playerUuid) {
+        if (playerUuid == null) {
+            throw new IllegalArgumentException(
+                    "Cannot load group for a null player UUID."
+            );
+        }
 
-	 /**
-	  * Loads the player's numeric permission group from {@code players.group}.
-	  *
-	  * <p>The group values currently have the following meaning:</p>
-	  *
-	  * <ul>
-	  *     <li>0 - Default</li>
-	  *     <li>1 - Recognized player</li>
-	  *     <li>2 - Donator</li>
-	  *     <li>3 - Moderator</li>
-	  *     <li>4 - Admin</li>
-	  *     <li>5 - Developer</li>
-	  *     <li>6 - Superuser</li>
-	  * </ul>
-	  *
-	  * <p>The column is escaped as {@code `group`} because {@code GROUP} is an
-	  * SQL keyword.</p>
-	  *
-	  * @param playerId database primary key from {@code players.id}
-	  * @return stored group id, or {@link #GROUP_DEFAULT} if the player does not
-	  *         exist or the value could not be loaded
-	  */
-	 public int getGroupId(int playerId) {
-	     if (playerId <= 0) {
-	         return GROUP_DEFAULT;
-	     }
-	
-	     try {
-	         Integer groupId = db.getInt(
-	                 "players",
-	                 "`group`",
-	                 "id = ?",
-	                 List.of(playerId)
-	         );
-	
-	         return groupId != null
-	                 ? groupId
-	                 : GROUP_DEFAULT;
-	
-	     } catch (SQLException e) {
-	         logger.severe(
-	                 "Failed to load group for playerId="
-	                 + playerId
-	                 + ": "
-	                 + e.getMessage()
-	         );
-	
-	         e.printStackTrace();
-	
-	         return GROUP_DEFAULT;
-	     }
-	 }
+        Integer playerId = findIdByUuid(playerUuid);
 
-	 /**
-	  * Loads the numeric group for a player identified by UUID.
-	  *
-	  * <p>The UUID is first resolved to the permanent {@code players.id}; the
-	  * actual group lookup then uses that player id.</p>
-	  *
-	  * @param uuid Mojang UUID
-	  * @return stored group id, or {@link #GROUP_DEFAULT} if the UUID is unknown
-	  */
-	 public int getGroupIdByUuid(UUID uuid) {
-	     Integer playerId = findIdByUuid(uuid);
+        if (playerId == null || playerId <= 0) {
+            throw new IllegalStateException(
+                    "Cannot load group because no player row exists for UUID "
+                            + playerUuid
+            );
+        }
+
+        return loadPlayerGroupType(playerId);
+    }
 	
-	     if (playerId == null || playerId <= 0) {
-	         return GROUP_DEFAULT;
-	     }
+
+    /**
+     * Persists a new group for a player.
+     *
+     * @param playerId permanent primary key from {@code players.id}
+     * @param newGroupType group that should be assigned
+     * @return {@code true} when exactly one player row was updated
+     */
+    public boolean updatePlayerGroup(
+            int playerId,
+            GroupType newGroupType
+    ) {
+        if (playerId <= 0) {
+            logger.warning(
+                    "ProfileStorage: attempted to update group for invalid playerId="
+                            + playerId
+            );
+            return false;
+        }
+
+        if (newGroupType == null) {
+            throw new IllegalArgumentException(
+                    "New player group cannot be null."
+            );
+        }
+
+        try {
+            int updatedRows = db.update(
+                    "players",
+                    List.of("group_id"),
+                    List.of(newGroupType.getDatabaseId()),
+                    "id = ?",
+                    List.of(playerId)
+            );
+
+            if (updatedRows != 1) {
+                logger.warning(
+                        "Expected to update one player group row, but updated "
+                                + updatedRows
+                                + " rows for playerId="
+                                + playerId
+                );
+                return false;
+            }
+
+            return true;
+        } catch (SQLException exception) {
+            logger.severe(
+                    "Failed to update group for playerId="
+                            + playerId
+                            + " to "
+                            + newGroupType.name()
+                            + " (group_id="
+                            + newGroupType.getDatabaseId()
+                            + "): "
+                            + exception.getMessage()
+            );
+            exception.printStackTrace();
+            return false;
+        }
+    }
 	
-	     return getGroupId(playerId);
-	 }
-	
-	 /**
-	  * Updates the player's numeric permission group.
-	  *
-	  * <p>Only group ids in the range {@code 0-6} are currently valid.</p>
-	  *
-	  * @param playerId database primary key from {@code players.id}
-	  * @param groupId new group id
-	  * @return {@code true} if the update was attempted successfully,
-	  *         otherwise {@code false}
-	  */
-	 public boolean setGroupId(int playerId, int groupId) {
-	     if (playerId <= 0) {
-	         logger.warning(
-	                 "ProfileStorage: attempted setGroupId with invalid playerId="
-	                 + playerId
-	         );
-	         return false;
-	     }
-	
-	     if (groupId < GROUP_DEFAULT || groupId > GROUP_SUPERUSER) {
-	         logger.warning(
-	                 "ProfileStorage: attempted to assign invalid groupId="
-	                 + groupId
-	                 + " to playerId="
-	                 + playerId
-	         );
-	         return false;
-	     }
-	
-	     try {
-	         db.update(
-	                 "players",
-	                 List.of("`group`"),
-	                 List.of(groupId),
-	                 "id = ?",
-	                 List.of(playerId)
-	         );
-	
-	         return true;
-	
-	     } catch (SQLException e) {
-	         logger.severe(
-	                 "Failed to update group for playerId="
-	                 + playerId
-	                 + " to groupId="
-	                 + groupId
-	                 + ": "
-	                 + e.getMessage()
-	         );
-	
-	         e.printStackTrace();
-	
-	         return false;
-	     }
-	 }
-	
-	 /**
-	  * Convenience overload for changing the group of a resolved profile.
-	  *
-	  * @param profile profile whose group should be changed
-	  * @param groupId new group id
-	  * @return {@code true} if the update was attempted successfully,
-	  *         otherwise {@code false}
-	  */
-	 public boolean setGroupId(Profile profile, int groupId) {
-	     if (!ensureValidId(profile, "setGroupId")) {
-	         return false;
-	     }
-	
-	     return setGroupId(profile.getId(), groupId);
-	 }
+
+    /**
+     * Persists a new group for a resolved profile and updates its cached group.
+     *
+     * @param profile resolved player profile
+     * @param newGroupType group that should be assigned
+     * @return {@code true} when persistent and cached state were updated
+     */
+    public boolean updatePlayerGroup(
+            Profile profile,
+            GroupType newGroupType
+    ) {
+        if (!ensureValidId(profile, "updatePlayerGroup")) {
+            return false;
+        }
+
+        if (newGroupType == null) {
+            throw new IllegalArgumentException(
+                    "New player group cannot be null."
+            );
+        }
+
+        boolean databaseUpdated = updatePlayerGroup(
+                profile.getId(),
+                newGroupType
+        );
+
+        if (!databaseUpdated) {
+            return false;
+        }
+
+        profile.setGroup(newGroupType.getGroup());
+        return true;
+    }
 
 
 	/**

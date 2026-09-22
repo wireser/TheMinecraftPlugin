@@ -19,6 +19,7 @@ import playerdata.ProfileManager;
 
 import java.net.URL;
 import java.util.*;
+import java.util.function.Consumer;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.logging.Logger;
@@ -271,6 +272,22 @@ public abstract class BaseModule implements Listener {
         registeredCommands.add(command);
     }
 
+    protected final void addCommand(String label, Consumer<CommandRegistry.Builder> configuration) {
+        CommandRegistry.Builder builder = new CommandRegistry.Builder(
+            label,
+            (sender, usedLabel, args) ->
+                onCommand(sender, usedLabel, args)
+        );
+
+        builder.moduleName(getModuleName());
+
+        if (configuration != null) {
+            configuration.accept(builder);
+        }
+
+        addCommand(builder.build());
+    }
+    
     // =====================================================================
     // DEPENDENCY CHECKING
     // =====================================================================

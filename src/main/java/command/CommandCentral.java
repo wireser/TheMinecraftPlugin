@@ -108,13 +108,18 @@ public final class CommandCentral {
 			aliases.put(aliasKey, labelKey);
 		}
 
-		Group group = command.getGroup();
-		if (group != null) {
-			group.addCommand(command.getLabel());
-			for (String alias : command.getAliases()) {
-				group.addCommand(alias);
-			}
-		}
+		/*
+		 * Register the command and its aliases directly with the lowest group
+		 * allowed to use it. Higher groups inherit access through the group hierarchy.
+		 */
+		Group minimumGroup = command
+		    .getMinimumGroup()
+		    .getGroup();
+
+		minimumGroup.registerCommand(
+		    command.getLabel(),
+		    command.getAliases()
+		);
 	}
 
 	/**
@@ -133,14 +138,17 @@ public final class CommandCentral {
 				aliases.remove(alias.toLowerCase(Locale.ROOT));
 			});
 
-			// Remove from group
-			Group group = command.getGroup();
-			if (group != null) {
-				group.removeCommand(command.getLabel());
-				for (String alias : command.getAliases()) {
-					group.removeCommand(alias);
-				}
-			}
+			/*
+			 * Remove the command and every alias pointing to it from the group where
+			 * it was originally registered.
+			 */
+			Group minimumGroup = command
+			    .getMinimumGroup()
+			    .getGroup();
+
+			minimumGroup.unregisterCommand(
+			    command.getLabel()
+			);
 		}
 	}
 
@@ -318,25 +326,28 @@ public final class CommandCentral {
 	}
 
 	/**
-	 * Checks if a command is visible to a player based on their group.
+	 * Determines whether the player's group grants access to a command.
 	 *
-	 * @param player The player to check
-	 * @param cmd	The command to check visibility for
-	 * @return true if the command is visible, false otherwise
+	 * <p>The {@link Group} object resolves inherited command access through
+	 * its parent hierarchy.</p>
+	 *
+	 * @param player player attempting to discover or execute the command
+	 * @param command command being checked
+	 * @return {@code true} when the player's group grants command access
 	 */
-	private boolean isCommandVisible(Profile player, CommandRegistry cmd) {
-		Group group = player.getGroup();
-		if (group == null) {
-			return false;
-		}
+	private boolean isCommandVisible(
+	    Profile player,
+	    CommandRegistry command
+	) {
+	    Group playerGroup = player.getGroup();
 
-		// Check label
-		if (group.hasCommand(cmd.getLabel())) {
-			return true;
-		}
+	    if (playerGroup == null) {
+	        return false;
+	    }
 
-		// Check aliases
-		return cmd.getAliases().stream().anyMatch(group::hasCommand);
+	    return playerGroup.canUseCommand(
+	        command.getLabel()
+	    );
 	}
 
 	/**

@@ -1,171 +1,316 @@
 package model;
 
-import java.util.ArrayList;
+import enums.Perm;
+import net.kyori.adventure.text.format.TextColor;
+
 import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
-import enums.Perm;
-import net.md_5.bungee.api.ChatColor;
+/**
+ * Runtime definition of a permission group.
+ *
+ * <p>A group stores only commands and flags assigned directly to it.
+ * Inherited values are resolved dynamically through {@link #parent}, ensuring
+ * commands registered later are immediately visible to all higher groups.</p>
+ */
+public final class Group {
 
-public class Group {
+    private final int databaseId;
+    private final String displayName;
+    private final Group parent;
 
-    // Data
-    public ChatColor color;
-    public String name;
-    public String prefix;
+    private String prefix;
+    private TextColor nameColor;
 
-    // Limits
-    public Integer limitClaim;
-    public Integer limitWarps;
-    public Integer limitShops;
+    /**
+     * Maps command labels and aliases to their canonical label.
+     *
+     * <p>Example:</p>
+     * <pre>
+     * spawn -> spawn
+     * hub   -> spawn
+     * </pre>
+     */
+    private final Map<String, String> directlyAssignedCommands =
+        new LinkedHashMap<>();
 
-    // Rewards
-    public Double rewardCash;
-    public String bonus;
-    public String bonusCommand;
-    public String newCommand;
+    /**
+     * Special capabilities assigned directly to this group.
+     */
+    private final Set<Perm> directlyAssignedFlags =
+        EnumSet.noneOf(Perm.class);
 
-    public Integer trip;
-
-    // Lists
-    // NOTE: we keep this as List<String> for now to avoid breaking other code,
-    // but all *new* logic will treat it as a lowercase, de-duplicated list of labels.
-    public List<String> commands = new ArrayList<>();
-    public List<Perm> flags = new ArrayList<>();
-
-    // Initialization
-    public Group(String name, String prefix, ChatColor color, Integer trip,
-                 Integer claim, Integer warps, Integer shops,
-                 Double cash, String bonus, String newCommand, String bonusCommand) {
-
-        this.name = name;
-        this.prefix = prefix;
-        this.color = color;
-
-        this.limitClaim = claim;
-        this.limitWarps = warps;
-        this.limitShops = shops;
-
-        this.rewardCash = cash;
-        this.bonus = bonus;
-        this.bonusCommand = bonusCommand;
-        this.newCommand = newCommand;
-
-        this.trip = trip;
-    }
-
-    // ===================== Flags =====================
-
-    public void addFlag(Perm flag) {
-        if (flag != null && !flags.contains(flag)) {
-            flags.add(flag);
+    public Group(
+        int databaseId,
+        String displayName,
+        String prefix,
+        String hexadecimalNameColor,
+        Group parent
+    ) {
+        if (databaseId < 0 || databaseId > 255) {
+            throw new IllegalArgumentException(
+                "Group database ID must fit inside TINYINT UNSIGNED: "
+                + databaseId
+            );
         }
+
+        if (displayName == null || displayName.isBlank()) {
+            throw new IllegalArgumentException(
+                "Group display name cannot be blank."
+            );
+        }
+
+        this.databaseId = databaseId;
+        this.displayName = displayName.trim();
+        this.prefix = prefix != null ? prefix : "";
+        this.nameColor = requireValidColor(hexadecimalNameColor);
+        this.parent = parent;
     }
 
-    public void removeFlag(Perm flag) {
-        flags.remove(flag);
+    public int getDatabaseId() {
+        return databaseId;
     }
 
-    public void inheritFlags(Group group) {
-        if (group == null) return;
-        for (Perm flag : group.flags) {
-            if (!flags.contains(flag)) {
-                flags.add(flag);
+    public String getDisplayName() {
+        return displayName;
+    }
+
+    public Group getParent() {
+        return parent;
+    }
+
+    public String getPrefix() {
+        return prefix;
+    }
+
+    public void setPrefix(String prefix) {
+        this.prefix = prefix != null ? prefix : "";
+    }
+
+    public TextColor getNameColor() {
+        return nameColor;
+    }
+
+    public void setNameColor(String hexadecimalNameColor) {
+        this.nameColor = requireValidColor(hexadecimalNameColor);
+    }
+
+    /**
+     * Registers a command label and all its aliases directly to this group.
+     *
+     * @param commandLabel canonical command label without a leading slash
+     * @param aliases alternative labels resolving to the canonical label
+     */
+    public void registerCommand(
+        String commandLabel,
+        Collection<String> aliases
+    ) {
+        String normalizedCommandLabel =
+            requireValidCommandLabel(commandLabel);
+
+        directlyAssignedCommands.put(
+            normalizedCommandLabel,
+            normalizedCommandLabel
+        );
+
+        if (aliases == null) {
+            return;
+        }
+
+        for (String alias : aliases) {
+            String normalizedAlias = normalizeCommandLabel(alias);
+
+            if (normalizedAlias != null) {
+                directlyAssignedCommands.put(
+                    normalizedAlias,
+                    normalizedCommandLabel
+                );
             }
         }
     }
 
-    // ===================== Commands =====================
+    /**
+     * Determines whether this group or any inherited group grants a command.
+     */
+    public boolean canUseCommand(String commandLabelOrAlias) {
+        String normalizedInput =
+            normalizeCommandLabel(commandLabelOrAlias);
 
-    private String normalizeCommand(String cmd) {
-        return cmd == null ? null : cmd.toLowerCase(Locale.ROOT);
+        if (normalizedInput == null) {
+            return false;
+        }
+
+        if (directlyAssignedCommands.containsKey(normalizedInput)) {
+            return true;
+        }
+
+        return parent != null
+            && parent.canUseCommand(normalizedInput);
     }
 
-    private void addSingleCommandInternal(String cmd) {
-        if (cmd == null || cmd.isEmpty()) return;
-        String key = normalizeCommand(cmd);
+    /**
+     * Resolves a label or alias to its canonical command label.
+     *
+     * @return canonical label, or {@code null} when unavailable
+     */
+    public String resolveCommandLabel(String commandLabelOrAlias) {
+        String normalizedInput =
+            normalizeCommandLabel(commandLabelOrAlias);
 
-        // Avoid duplicates
-        if (!commands.contains(key)) {
-            commands.add(key);
+        if (normalizedInput == null) {
+            return null;
+        }
+
+        String directlyAssignedCommand =
+            directlyAssignedCommands.get(normalizedInput);
+
+        if (directlyAssignedCommand != null) {
+            return directlyAssignedCommand;
+        }
+
+        return parent != null
+            ? parent.resolveCommandLabel(normalizedInput)
+            : null;
+    }
+
+    /**
+     * Returns an immutable map containing direct and inherited commands.
+     *
+     * <p>Parent commands are inserted first, allowing this group's direct
+     * assignments to override inherited alias mappings if necessary.</p>
+     */
+    public Map<String, String> getAvailableCommands() {
+        Map<String, String> availableCommands =
+            new LinkedHashMap<>();
+
+        if (parent != null) {
+            availableCommands.putAll(parent.getAvailableCommands());
+        }
+
+        availableCommands.putAll(directlyAssignedCommands);
+
+        return Collections.unmodifiableMap(availableCommands);
+    }
+
+    /**
+     * Removes a directly assigned command and all direct aliases pointing to it.
+     *
+     * <p>Inherited commands cannot be removed through this method.</p>
+     */
+    public void unregisterCommand(String commandLabel) {
+        String normalizedCommandLabel =
+            normalizeCommandLabel(commandLabel);
+
+        if (normalizedCommandLabel == null) {
+            return;
+        }
+
+        directlyAssignedCommands.entrySet().removeIf(
+            entry -> entry.getValue().equals(normalizedCommandLabel)
+        );
+    }
+
+    public void grantFlag(Perm permissionFlag) {
+        directlyAssignedFlags.add(
+            Objects.requireNonNull(
+                permissionFlag,
+                "Permission flag cannot be null."
+            )
+        );
+    }
+
+    public void revokeFlag(Perm permissionFlag) {
+        if (permissionFlag != null) {
+            directlyAssignedFlags.remove(permissionFlag);
         }
     }
 
     /**
-     * Adds a single command label/alias to this group.
-     * Stored in lowercase, duplicate-safe.
+     * Determines whether this group or any inherited group grants a flag.
      */
-    public void addCommand(String cmd) {
-        addSingleCommandInternal(cmd);
-    }
-
-    public void addCommand(String[] cmd) {
-        if (cmd == null) return;
-        for (String c : cmd) {
-            addSingleCommandInternal(c);
+    public boolean hasFlag(Perm permissionFlag) {
+        if (permissionFlag == null) {
+            return false;
         }
-    }
 
-    public void addCommand(List<String> cmd) {
-        if (cmd == null) return;
-        for (String c : cmd) {
-            addSingleCommandInternal(c);
+        if (directlyAssignedFlags.contains(permissionFlag)) {
+            return true;
         }
+
+        return parent != null
+            && parent.hasFlag(permissionFlag);
     }
 
-    public void addCommand(Set<String> cmd) {
-        if (cmd == null) return;
-        for (String c : cmd) {
-            addSingleCommandInternal(c);
+    public Set<Perm> getAvailableFlags() {
+        Set<Perm> availableFlags =
+            EnumSet.noneOf(Perm.class);
+
+        if (parent != null) {
+            availableFlags.addAll(parent.getAvailableFlags());
         }
+
+        availableFlags.addAll(directlyAssignedFlags);
+
+        return Collections.unmodifiableSet(availableFlags);
     }
 
-    public void addCommand(Collection<String> cmd) {
-        if (cmd == null) return;
-        for (String c : cmd) {
-            addSingleCommandInternal(c);
+    private static String requireValidCommandLabel(String commandLabel) {
+        String normalizedCommandLabel =
+            normalizeCommandLabel(commandLabel);
+
+        if (normalizedCommandLabel == null) {
+            throw new IllegalArgumentException(
+                "Command label cannot be null or blank."
+            );
         }
+
+        return normalizedCommandLabel;
     }
 
-    public void addCommand(HashMap<String, String> cmd) {
-        if (cmd == null) return;
-        for (String value : cmd.values()) {
-            addSingleCommandInternal(value);
+    private static String normalizeCommandLabel(String commandLabel) {
+        if (commandLabel == null) {
+            return null;
         }
-    }
 
-    /**
-     * Inherits commands from another group.
-     * Uses the same normalized add logic (lowercase + de-duplication).
-     */
-    public void inheritCommands(Group group) {
-        if (group == null) return;
-        for (String cmd : group.commands) {
-            addSingleCommandInternal(cmd);
+        String normalizedCommandLabel = commandLabel
+            .trim()
+            .toLowerCase(Locale.ROOT);
+
+        if (normalizedCommandLabel.startsWith("/")) {
+            normalizedCommandLabel =
+                normalizedCommandLabel.substring(1);
         }
+
+        return normalizedCommandLabel.isEmpty()
+            ? null
+            : normalizedCommandLabel;
     }
 
-    /**
-     * Checks if this group has access to the given command/alias.
-     * Case-insensitive.
-     */
-    public boolean hasCommand(String cmd) {
-        if (cmd == null || cmd.isEmpty()) return false;
-        String key = normalizeCommand(cmd);
-        return commands.contains(key);
-    }
+    private static TextColor requireValidColor(
+        String hexadecimalColor
+    ) {
+        if (hexadecimalColor == null) {
+            throw new IllegalArgumentException(
+                "Group color cannot be null."
+            );
+        }
 
-    /**
-     * Removes a command/alias from this group.
-     * Case-insensitive.
-     */
-    public void removeCommand(String cmd) {
-        if (cmd == null || cmd.isEmpty()) return;
-        String key = normalizeCommand(cmd);
-        commands.removeIf(c -> c.equals(key));
+        TextColor parsedColor =
+            TextColor.fromHexString(hexadecimalColor);
+
+        if (parsedColor == null) {
+            throw new IllegalArgumentException(
+                "Invalid hexadecimal group color: "
+                + hexadecimalColor
+            );
+        }
+
+        return parsedColor;
     }
-    
 }

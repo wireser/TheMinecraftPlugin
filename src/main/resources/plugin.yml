@@ -16,4 +16,13 @@ soft-depend: [PinataParty]
 
 # COMMANDS
 commands:
-  test:
+  
+  # Locations
+  spawn:
+  setspawn:
+  home:
+  sethome:
+  warp:
+  rtp:
+  wild:
+  hub:
