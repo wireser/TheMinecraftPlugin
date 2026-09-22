@@ -1,108 +1,90 @@
 package command;
 
 /**
- * Defines structured failure types for command execution.
- * Each enum constant contains metadata used for logging,
- * fallback messages, and language-key resolution.
+ * Describes a structured command failure.
+ *
+ * <p>Each type defines its logging severity, whether it should be logged and
+ * the language key used for its player-facing message. Message text belongs
+ * exclusively to {@code lang.yml}; this enum does not duplicate language
+ * fallbacks.</p>
  */
 public enum CommandExceptionType {
 
-    /**
-     * The command syntax was invalid (missing args, wrong format).
-     * Not considered an internal error and should not be logged.
-     */
+    /** Invalid or incomplete command syntax. */
     SYNTAX_ERROR(
-        Severity.INFO,
-        false,
-        "command.error.syntax",
-        "Invalid command syntax."
+            Severity.INFO,
+            false,
+            "command.error.prefix"
     ),
 
-    /**
-     * The user lacks the required permission.
-     */
+    /** The player lacks permission for the command. */
     PERMISSION_ERROR(
-        Severity.WARN,
-        false,
-        "command.error.permission",
-        "You don't have permission to do that."
+            Severity.WARN,
+            false,
+            "command.no_permission"
     ),
 
-    /**
-     * The user lacks permission for a specific subcommand.
-     */
+    /** The player lacks permission for a subcommand. */
     SUBCOMMAND_PERMISSION(
-        Severity.WARN,
-        false,
-        "command.error.subcommand_permission",
-        "You don't have permission for that subcommand."
+            Severity.WARN,
+            false,
+            "command.no_sub_permission"
     ),
 
-    /**
-     * The command or module is temporarily unavailable
-     * (disabled, maintenance, etc.).
-     */
+    /** The command or its owning module is temporarily unavailable. */
     UNAVAILABLE_ERROR(
-        Severity.WARN,
-        true,
-        "command.error.unavailable",
-        "This command is currently unavailable."
+            Severity.WARN,
+            true,
+            "command.unavailable"
     ),
 
-    /**
-     * A general or unexpected internal command error.
-     */
+    /** An unexpected internal error occurred during command execution. */
     GENERAL_ERROR(
-        Severity.ERROR,
-        true,
-        "command.error.general",
-        "An error occurred while executing the command."
+            Severity.ERROR,
+            true,
+            "command.error.general"
     );
 
     private final Severity severity;
     private final boolean shouldLog;
     private final String languageKey;
-    private final String fallbackMessage;
 
-    CommandExceptionType(Severity severity, boolean shouldLog, String languageKey, String fallbackMessage) {
+    CommandExceptionType(
+            Severity severity,
+            boolean shouldLog,
+            String languageKey
+    ) {
         this.severity = severity;
         this.shouldLog = shouldLog;
         this.languageKey = languageKey;
-        this.fallbackMessage = fallbackMessage;
     }
 
     /**
-     * @return Severity level of the error.
+     * @return severity used when this failure is written to the log
      */
     public Severity getSeverity() {
         return severity;
     }
 
     /**
-     * @return Whether this error should be written to logs.
+     * @return {@code true} when this failure should be written to the log
      */
     public boolean shouldLog() {
         return shouldLog;
     }
 
     /**
-     * @return Language key for localization lookup.
+     * @return language key for the player-facing message
      */
     public String getLanguageKey() {
         return languageKey;
     }
 
-    /**
-     * @return Fallback English message if language key missing.
-     */
-    public String getFallbackMessage() {
-        return fallbackMessage;
-    }
-
+    /** Logging severity for a structured command failure. */
     public enum Severity {
         INFO,
         WARN,
         ERROR
     }
-    
+
 }

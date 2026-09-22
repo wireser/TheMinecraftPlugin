@@ -509,17 +509,23 @@ public abstract class BaseModule implements Listener {
     }
 
     /**
-     * Text from language manager (component).
+     * Returns a language line with optional positional replacements.
+     *
+     * <p>Arguments replace {@code %1}, {@code %2}, and so on. Language data is
+     * already cached in memory, so this method performs no filesystem access.</p>
+     *
+     * @param key language key
+     * @param arguments optional positional replacement values
+     * @return resolved Adventure component
      */
-    public Component getText(String key) {
-        return lang.get(key);
-    }
-
-    /**
-     * Text with positional placeholders (%1, %2, ...).
-     */
-    public Component getText(String key, Object... args) {
-        return lang.get(key, args);
+    public Component getText(
+            String key,
+            Object... arguments
+    ) {
+        return lang.line(
+                key,
+                arguments
+        );
     }
 
     // --- Console / server / world / logger ---
