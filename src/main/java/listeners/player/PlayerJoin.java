@@ -53,6 +53,10 @@ public final class PlayerJoin implements Listener {
             return;
         }
 
+        Main.getInstance()
+                .getModuleManager()
+                .notifyProfileLoaded(profile);
+
         /*
          * Keep this INFO message while testing the new profile lifecycle.
          * Once we're confident everything works, we can remove/downgrade it.
@@ -64,4 +68,5 @@ public final class PlayerJoin implements Listener {
                 + profile.getId()
         );
     }
+
 }

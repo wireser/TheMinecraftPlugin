@@ -7,6 +7,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 import main.Main;
+import playerdata.Profile;
 import playerdata.ProfileManager;
 
 /**
@@ -42,6 +43,13 @@ public final class PlayerQuit implements Listener {
             return;
         }
 
+        Profile profile = profileManager.resolveOnline(player);
+
+        if (profile != null) {
+            plugin.getModuleManager().notifyProfileUnloaded(profile);
+        }
+
         profileManager.deleteOnlineProfile(player);
     }
+
 }

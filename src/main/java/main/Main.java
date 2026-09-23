@@ -17,6 +17,7 @@ import managers.ConfigManager;
 import managers.LanguageManager;
 import managers.ModuleManager;
 import managers.YamlLanguageManager;
+import modules.EconomyModule;
 import modules.LocationsModule;
 import playerdata.Profile;
 import playerdata.ProfileManager;
@@ -102,6 +103,7 @@ public class Main extends JavaPlugin
 
         // Register modules here
 		moduleManager.registerModule(new LocationsModule());
+		moduleManager.registerModule(new EconomyModule());
 
         // Load + enable in dependency order
 		registerModules();

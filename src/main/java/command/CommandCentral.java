@@ -1,6 +1,5 @@
 package command;
 
-import enums.Currency;
 import main.Main;
 import managers.LanguageManager;
 import model.Group;
@@ -8,13 +7,12 @@ import playerdata.Profile;
 
 import org.bukkit.command.Command;
 
-import java.math.BigDecimal;
 import java.util.*;
 import java.util.logging.Level;
 
 /**
  * Central command registry for managing all server commands.
- * Handles registration, execution, permissions, costs, and cooldowns.
+ * Handles registration, execution, permissions, and cooldowns.
  */
 public final class CommandCentral {
 	
@@ -193,20 +191,6 @@ public final class CommandCentral {
 			return true;
 		}
 
-		// Costs
-		if (!checkCosts(player, cmd)) {
-		    Currency currency = cmd.getCurrency();       // must be non-null here, or we skipped earlier
-		    double required  = getEffectiveCost(cmd);
-		    String formatted = formatCurrency(required, currency);
-
-		    player.sendMessage(language.line(
-		        "command.insufficient_funds",
-		        formatted,
-		        currency.name()
-		    ));
-		    return true;
-		}
-
 		// Cooldown
 		if (cmd.getCooldownSeconds() > 0 && !cooldownManager.checkCooldown(player.getUuid(), cmd)) {
 			double remaining = cooldownManager.getRemaining(player.getUuid(), cmd);
@@ -221,8 +205,7 @@ public final class CommandCentral {
 			// Execute
 			cmd.getExecutor().execute(player, usedLabel, args);
 
-			// Post: costs + cooldown
-			applyCosts(player, cmd);
+			// Apply the cooldown only after the command completes successfully.
 			if (cmd.getCooldownSeconds() > 0) {
 				cooldownManager.applyCooldown(player.getUuid(), cmd);
 			}
@@ -289,100 +272,6 @@ public final class CommandCentral {
 			return true;
 		}
 		return instance.getModuleManager().isModuleEnabled(moduleName);
-	}
-
-	/**
-	 * Returns the effective cost for this command, taking currency type into account.
-	 * <p>
-	 * For currencies that are configured as integral, the cost is rounded to the
-	 * nearest whole number. For decimal currencies, the raw cost is used as-is.
-	 *
-	 * @param cmd the command definition
-	 * @return effective cost to charge
-	 */
-	private double getEffectiveCost(CommandRegistry cmd) {
-	    double cost = cmd.getCost();
-	    Currency currency = cmd.getCurrency();
-
-	    if (currency != null && currency.isIntegral()) {
-	        return Math.round(cost);
-	    }
-	    return cost;
-	}
-
-	/**
-	 * Checks if a player has sufficient funds for a command.
-	 *
-	 * @param player the profile to check
-	 * @param cmd    the command with associated cost
-	 * @return {@code true} if the player can afford the command (or no cost is defined),
-	 *         {@code false} otherwise
-	 */
-	private boolean checkCosts(Profile player, CommandRegistry cmd) {
-	    double rawCost = cmd.getCost();
-	    if (rawCost <= 0.0d) {
-	        // No cost configured -> always allowed
-	        return true;
-	    }
-
-	    Currency currency = cmd.getCurrency();
-	    if (currency == null) {
-	        instance.getLogger().warning(String.format(
-	                "Command '%s' has a non-zero cost (%.3f) but no currency defined. Skipping cost.",
-	                cmd.getLabel(),
-	                rawCost
-	        ));
-	        // Treat as free from the player's perspective
-	        return true;
-	    }
-
-	    double effective = getEffectiveCost(cmd);
-
-	    // Profile should return BigDecimal here
-	    BigDecimal balance = player.getBalance(currency);
-	    BigDecimal required = BigDecimal.valueOf(effective);
-
-	    return balance.compareTo(required) >= 0;
-	}
-
-	/**
-	 * Formats a currency value appropriately for its type.
-	 *
-	 * @param amount   the amount to format
-	 * @param currency the currency type (may be {@code null})
-	 * @return formatted currency string
-	 */
-	private String formatCurrency(double amount, Currency currency) {
-	    if (currency != null && currency.isIntegral()) {
-	        return String.valueOf((int) Math.round(amount));
-	    } else {
-	        // Use a fixed 2-decimal representation for decimal currencies
-	        return String.format(Locale.US, "%.2f", amount);
-	    }
-	}
-
-	/**
-	 * Applies command costs to a player after successful execution.
-	 *
-	 * @param player the player to deduct costs from
-	 * @param cmd    the command with associated cost
-	 */
-	private void applyCosts(Profile player, CommandRegistry cmd) {
-	    double rawCost = cmd.getCost();
-	    if (rawCost <= 0.0d) {
-	        return;
-	    }
-
-	    Currency currency = cmd.getCurrency();
-	    if (currency == null) {
-	        return;
-	    }
-
-	    double effective = getEffectiveCost(cmd);
-	    BigDecimal delta = BigDecimal.valueOf(effective).negate();
-
-	    // Subtract by adding a negative delta
-	    player.addBalance(currency, delta);
 	}
 
 	private void logCommandException(CommandRegistry cmd, CommandException e) {

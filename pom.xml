@@ -7,7 +7,7 @@
 
 	<groupId>com.wireser.minecraft</groupId>
 	<artifactId>TheMinecraftPlugin</artifactId>
-	<version>1.0.0</version>
+	<version>9.0.0</version>
 	<name>The Minecraft Plugin</name>
 	<description>The only plugin we will ever need.</description>
 
@@ -66,7 +66,7 @@
 		<maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
 
 		<!-- Dependency versions -->
-		<paper.version>[26.2.build,)</paper.version>
+		<paper.version>[26.3.build,)</paper.version>
 		<hikari.version>7.1.0</hikari.version>
 		<mariadb.version>3.5.10</mariadb.version>
 		<json.version>20260814</json.version>
