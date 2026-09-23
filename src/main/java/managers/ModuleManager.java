@@ -85,7 +85,7 @@ public class ModuleManager {
         // 3) Enable in order, but only if config says module.enabled: true
         for (BaseModule module : ordered) {
             try {
-                if (module.isEnabled()) {      // after load(), this reflects config meta.enabled
+                if (module.isEnabledByConfiguration()) {
                     module.enable();
                 } else {
                     module.log("Disabled by configuration (meta.enabled = false)");
@@ -112,6 +112,25 @@ public class ModuleManager {
         BaseModule module = modules.get(moduleName);
         if (module != null && !module.isEnabled()) {
             module.enable();
+            if (module.isEnabled()) {
+                notifyModuleAboutOnlineProfiles(module);
+            }
+        }
+    }
+
+    /** Temporarily pauses a running module while retaining its runtime data. */
+    public void pauseModule(String moduleName) {
+        BaseModule module = modules.get(moduleName);
+        if (module != null) {
+            module.pause();
+        }
+    }
+
+    /** Resumes a previously paused module. */
+    public void resumeModule(String moduleName) {
+        BaseModule module = modules.get(moduleName);
+        if (module != null) {
+            module.resume();
         }
     }
 
@@ -219,7 +238,43 @@ public class ModuleManager {
      * Alias for {@link #getAllModules()} for backwards compatibility.
      */
     public List<BaseModule> getLoadedModules() {
-        return getAllModules();
+        return modules.values().stream()
+                .filter(BaseModule::isLoaded)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Delivers a newly created core profile to every running module.
+     */
+    public void notifyProfileLoaded(playerdata.Profile profile) {
+        if (profile == null) return;
+
+        for (BaseModule module : modules.values()) {
+            if (module.isEnabled() || module.isPaused()) {
+                module.onProfileLoaded(profile);
+            }
+        }
+    }
+
+    /**
+     * Gives modules a chance to discard session data before the core profile
+     * leaves memory.
+     */
+    public void notifyProfileUnloaded(playerdata.Profile profile) {
+        if (profile == null) return;
+
+        for (BaseModule module : modules.values()) {
+            if (module.isEnabled() || module.isPaused()) {
+                module.onProfileUnloaded(profile);
+            }
+        }
+    }
+
+    private void notifyModuleAboutOnlineProfiles(BaseModule module) {
+        for (playerdata.Profile profile
+                : Main.getInstance().getProfileManager().getOnlineProfiles()) {
+            module.onProfileLoaded(profile);
+        }
     }
 
     /**

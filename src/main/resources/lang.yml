@@ -14,3 +14,7 @@ command:
   error:
     prefix: "&cError: &f%1"
     general: "&cAn unexpected error occurred while executing this command."
+
+economy:
+  balance: "&e>> Your current bank balance is &f%1&e, safely stored until you need it."
+  wallet: "&e>> You currently have &f%1 &eavailable to spend from your wallet."

@@ -8,7 +8,7 @@ website: www.theminecraftplugin.com
 version: ${project.version}
 main: main.Main
 load: POSTWORLD
-api-version: '26.2'
+api-version: '26.3'
 prefix: TheMinecraftPlugin
 
 # DEPENDENCIES
@@ -26,3 +26,9 @@ commands:
   rtp:
   wild:
   hub:
+
+  # Economy
+  balance:
+  wallet:
+  pay:
+  transfer:

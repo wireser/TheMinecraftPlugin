@@ -14,6 +14,8 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -267,6 +269,106 @@ public final class DatabaseAccess {
         sql.append(")");
 
         return executeUpdate(sql.toString(), values);
+    }
+
+    /**
+     * Inserts a row when its unique key does not already exist.
+     *
+     * <p>Unlike {@code INSERT IGNORE}, this does not suppress unrelated SQL
+     * errors. A duplicate key performs a harmless self-assignment using the
+     * first supplied column.</p>
+     */
+    public int insertIfAbsent(
+            String table,
+            List<String> columns,
+            List<?> values
+    ) throws SQLException {
+        Objects.requireNonNull(columns, "columns");
+        Objects.requireNonNull(values, "values");
+
+        if (columns.isEmpty()) {
+            throw new IllegalArgumentException("columns must not be empty.");
+        }
+        if (columns.size() != values.size()) {
+            throw new IllegalArgumentException("columns and values must have the same size.");
+        }
+
+        validateIdentifier(table, "table");
+        for (String column : columns) {
+            validateIdentifier(column, "column");
+        }
+
+        StringBuilder sql = new StringBuilder("INSERT INTO ")
+                .append(quoteIdentifier(table))
+                .append(" (");
+
+        for (int index = 0; index < columns.size(); index++) {
+            if (index > 0) sql.append(", ");
+            sql.append(quoteIdentifier(columns.get(index)));
+        }
+
+        sql.append(") VALUES (");
+        for (int index = 0; index < values.size(); index++) {
+            if (index > 0) sql.append(", ");
+            sql.append('?');
+        }
+
+        String firstColumn = quoteIdentifier(columns.getFirst());
+        sql.append(") ON DUPLICATE KEY UPDATE ")
+                .append(firstColumn)
+                .append(" = ")
+                .append(firstColumn);
+
+        return executeUpdate(sql.toString(), values);
+    }
+
+    /**
+     * Loads several columns from one row using one database connection.
+     *
+     * @return column/value map, or an empty map when no row matches
+     */
+    public Map<String, Object> getRow(
+            String table,
+            List<String> columns,
+            String whereClause,
+            List<?> parameters
+    ) throws SQLException {
+        Objects.requireNonNull(columns, "columns");
+
+        if (columns.isEmpty()) {
+            throw new IllegalArgumentException("columns must not be empty.");
+        }
+
+        validateIdentifier(table, "table");
+        for (String column : columns) {
+            validateIdentifier(column, "column");
+        }
+
+        StringBuilder sql = new StringBuilder("SELECT ");
+        for (int index = 0; index < columns.size(); index++) {
+            if (index > 0) sql.append(", ");
+            sql.append(quoteIdentifier(columns.get(index)));
+        }
+        sql.append(" FROM ").append(quoteIdentifier(table));
+
+        if (whereClause != null && !whereClause.isBlank()) {
+            sql.append(" WHERE ").append(whereClause);
+        }
+        sql.append(" LIMIT 1");
+
+        Map<String, Object> row = querySingle(
+                sql.toString(),
+                parameters,
+                resultSet -> {
+                    Map<String, Object> valuesByColumn = new LinkedHashMap<>();
+                    for (String column : columns) {
+                        valuesByColumn.put(column, resultSet.getObject(column));
+                    }
+                    return valuesByColumn;
+                }
+        );
+
+        return row != null ? row : Collections.emptyMap();
     }
 
     /**

@@ -1,6 +1,5 @@
 package command;
 
-import enums.Currency;
 import enums.GroupType;
 
 import java.util.*;
@@ -10,7 +9,7 @@ import java.util.*;
  * <p>
  * Instances of this class are immutable once created via {@link Builder}.
  * It encapsulates metadata (label, aliases, syntax, description, permissions,
- * module, group, usages) as well as runtime behavior (executor, cost, cooldown,
+ * module, group, usages) as well as runtime behavior (executor, cooldown,
  * optional tab-completion handler).
  */
 public final class CommandRegistry {
@@ -41,19 +40,6 @@ public final class CommandRegistry {
      * Never {@code null}; defaults to empty string.
      */
     private final String description;
-
-    /**
-     * Cost required to execute the command (always &gt;= 0).
-     * A value of 0 means "no cost".
-     */
-    private final double cost;
-
-    /**
-     * Currency type for the cost.
-     * May be {@code null} to indicate "no currency defined" even if cost is &gt; 0;
-     * in that case, higher-level logic decides how to handle it.
-     */
-    private final Currency currency;
 
     /**
      * Cooldown in seconds (always &gt;= 0).
@@ -149,10 +135,6 @@ public final class CommandRegistry {
         this.usages = Collections.unmodifiableMap(new LinkedHashMap<>(builder.usages));
         this.tabHandler = builder.tabHandler;
 
-        // Cost & currency
-        this.cost = Math.max(0.0, builder.cost); // no negative costs
-        this.currency = builder.currency;        // may be null if "no currency" is desired
-
         // Cooldown (never negative)
         this.cooldownSeconds = Math.max(0, builder.cooldownSeconds);
 
@@ -214,20 +196,6 @@ public final class CommandRegistry {
     }
 
     /**
-     * @return The cost required to execute this command (always &gt;= 0).
-     */
-    public double getCost() {
-        return cost;
-    }
-
-    /**
-     * @return The currency used for this command's cost, or {@code null} if none.
-     */
-    public Currency getCurrency() {
-        return currency;
-    }
-
-    /**
      * @return The cooldown in seconds for this command (always &gt;= 0).
      */
     public int getCooldownSeconds() {
@@ -279,25 +247,10 @@ public final class CommandRegistry {
     }
 
     /**
-     * @return {@code true} if this command has a non-zero cost and a defined currency.
-     */
-    public boolean hasCost() {
-        return cost > 0 && currency != null;
-    }
-
-    /**
      * @return {@code true} if this command has a cooldown greater than zero.
      */
     public boolean hasCooldown() {
         return cooldownSeconds > 0;
-    }
-
-    /**
-     * @return {@code true} if this command is considered free
-     *         (no cost or no currency defined).
-     */
-    public boolean isFree() {
-        return cost <= 0 || currency == null;
     }
 
     /**
@@ -354,7 +307,6 @@ public final class CommandRegistry {
      *     .aliases("hub", "lobby")
      *     .description("Teleport to spawn")
      *     .syntax("/spawn")
-     *     .cost(100, Currency.MONEY)
      *     .cooldownSeconds(10)
      *     .permissionNode("tmp.spawn.use")
      *     .moduleName("Core")
@@ -371,8 +323,6 @@ public final class CommandRegistry {
         private final Map<String, String> usages = new LinkedHashMap<>();
         private String syntax = "";
         private String description = "";
-        private double cost = 0.0;
-        private Currency currency = null; // null means "no currency defined"
         private int cooldownSeconds = 0;
         private String permissionNode = null; // Bukkit-style permission node
         private String moduleName = "global";
@@ -422,19 +372,6 @@ public final class CommandRegistry {
          */
         public Builder description(String description) {
             this.description = description;
-            return this;
-        }
-
-        /**
-         * Sets the execution cost for the command.
-         *
-         * @param cost     The cost to execute the command (will be clamped to &gt;= 0).
-         * @param currency The currency type for the cost (may be {@code null}).
-         * @return This builder instance.
-         */
-        public Builder cost(double cost, Currency currency) {
-            this.cost = cost;
-            this.currency = currency;
             return this;
         }
 

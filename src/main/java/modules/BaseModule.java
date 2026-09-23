@@ -35,6 +35,22 @@ import java.util.logging.Logger;
  */
 public abstract class BaseModule implements Listener {
 
+    /**
+     * Runtime lifecycle state of a module.
+     *
+     * <p>The configured {@code meta.enabled} value is stored separately. This
+     * prevents a configuration preference from being confused with the
+     * module's current runtime condition.</p>
+     */
+    public enum ModuleState {
+        REGISTERED,
+        LOADED,
+        ENABLED,
+        PAUSED,
+        DISABLED,
+        FAILED
+    }
+
     // Core wiring
     protected final Main plugin;
     protected final String moduleName;
@@ -47,7 +63,8 @@ public abstract class BaseModule implements Listener {
     // Metadata
     protected String moduleVersion;
     protected String description = "No description provided";
-    protected boolean enabled = false;
+    private boolean enabledByConfiguration = true;
+    private ModuleState moduleState = ModuleState.REGISTERED;
 
     // Dependencies (configured via YAML, not hard-coded)
     protected List<String> requiredPlugins = new ArrayList<>();
@@ -78,13 +95,19 @@ public abstract class BaseModule implements Listener {
      * Sets up config and reads metadata.
      */
     public final void load() {
-        // Config is always: <dataFolder>/modules/<modulename>/config.yml
-        this.configManager = new ConfigManager(plugin, "modules/" + moduleName.toLowerCase(Locale.ROOT) + "/config");
-        this.configManager.setup();
-        this.config = configManager.getConfig();
+        try {
+            // Config is always: <dataFolder>/modules/<modulename>/config.yml
+            this.configManager = new ConfigManager(plugin, "modules/" + moduleName.toLowerCase(Locale.ROOT) + "/config");
+            this.configManager.setup();
+            this.config = configManager.getConfig();
 
-        loadMetaFromConfig();
-        onLoad();
+            loadMetaFromConfig();
+            onLoad();
+            moduleState = ModuleState.LOADED;
+        } catch (RuntimeException exception) {
+            moduleState = ModuleState.FAILED;
+            throw exception;
+        }
     }
 
     /**
@@ -118,7 +141,7 @@ public abstract class BaseModule implements Listener {
         // Apply to fields
         this.moduleVersion = cfgVersion;
         this.description   = cfgDesc;
-        this.enabled       = cfgEnabled;
+        this.enabledByConfiguration = cfgEnabled;
 
         requiredPlugins.clear();
         requiredPlugins.addAll(plugins);
@@ -132,7 +155,7 @@ public abstract class BaseModule implements Listener {
         // Persist back (so defaults get written if missing)
         config.set("meta.version",         this.moduleVersion);
         config.set("meta.description",     this.description);
-        config.set("meta.enabled",         this.enabled);
+        config.set("meta.enabled",         this.enabledByConfiguration);
         config.set("meta.required_plugins", new ArrayList<>(requiredPlugins));
         config.set("meta.required_modules", new ArrayList<>(requiredModules));
         config.set("meta.preload_before",   new ArrayList<>(preloadBefore));
@@ -144,14 +167,30 @@ public abstract class BaseModule implements Listener {
      * Plugin is enabling this module.
      */
     public final void enable() {
-        if (!enabled) {
+        if (moduleState == ModuleState.ENABLED) {
+            return;
+        }
+
+        if (moduleState == ModuleState.PAUSED) {
+            resume();
+            return;
+        }
+
+        if (moduleState == ModuleState.REGISTERED) {
+            throw new IllegalStateException(
+                    "Module must be loaded before it can be enabled: " + moduleName
+            );
+        }
+
+        if (!enabledByConfiguration) {
             log("Not enabled in config, skipping.");
+            moduleState = ModuleState.DISABLED;
             return;
         }
 
         if (!checkDependencies()) {
             log("Disabled due to missing dependencies.");
-            enabled = false;
+            moduleState = ModuleState.FAILED;
             return;
         }
 
@@ -167,15 +206,26 @@ public abstract class BaseModule implements Listener {
         // Register listeners from modules.<modulename>.listeners.*
         registerListenersDynamically();
 
-        onEnable();
-        log("Enabled v" + moduleVersion);
+        try {
+            onEnable();
+            moduleState = ModuleState.ENABLED;
+            log("Enabled v" + moduleVersion);
+        } catch (RuntimeException exception) {
+            for (CommandRegistry cmd : registeredCommands) {
+                central.unregister(cmd.getLabel());
+            }
+            registeredCommands.clear();
+            moduleState = ModuleState.FAILED;
+            throw exception;
+        }
     }
 
     /**
      * Plugin is disabling this module.
      */
     public final void disable() {
-        if (!enabled) {
+        if (moduleState == ModuleState.DISABLED
+                || moduleState == ModuleState.REGISTERED) {
             return;
         }
 
@@ -187,8 +237,42 @@ public abstract class BaseModule implements Listener {
         registeredCommands.clear();
 
         onDisable();
-        enabled = false;
+        moduleState = ModuleState.DISABLED;
         log("Disabled.");
+    }
+
+    /**
+     * Temporarily suspends the module without discarding its loaded runtime
+     * data. Commands become unavailable because paused modules are not treated
+     * as enabled by {@link #isEnabled()}.
+     */
+    public final void pause() {
+        if (moduleState != ModuleState.ENABLED) {
+            return;
+        }
+
+        onPause();
+        moduleState = ModuleState.PAUSED;
+        log("Paused.");
+    }
+
+    /**
+     * Resumes a previously paused module.
+     */
+    public final void resume() {
+        if (moduleState != ModuleState.PAUSED) {
+            return;
+        }
+
+        if (!checkDependencies()) {
+            moduleState = ModuleState.FAILED;
+            log("Could not resume because a dependency is unavailable.");
+            return;
+        }
+
+        onResume();
+        moduleState = ModuleState.ENABLED;
+        log("Resumed.");
     }
 
     /**
@@ -235,6 +319,16 @@ public abstract class BaseModule implements Listener {
         // Optional override
     }
 
+    /** Called when a running module is temporarily paused. */
+    protected void onPause() {
+        // Optional override
+    }
+
+    /** Called when a paused module returns to normal operation. */
+    protected void onResume() {
+        // Optional override
+    }
+
     /**
      * Called after config reload.
      */
@@ -246,6 +340,25 @@ public abstract class BaseModule implements Listener {
      * Called on plugin shutdown.
      */
     protected void onShutdown() {
+        // Optional override
+    }
+
+    /**
+     * Called after the core profile of an online player has been created.
+     * Modules should initialize and cache only the data they own.
+     *
+     * @param profile newly loaded online profile
+     */
+    public void onProfileLoaded(Profile profile) {
+        // Optional override
+    }
+
+    /**
+     * Called before an online profile is removed from the core profile cache.
+     *
+     * @param profile profile whose online session is ending
+     */
+    public void onProfileUnloaded(Profile profile) {
         // Optional override
     }
 
@@ -579,7 +692,27 @@ public abstract class BaseModule implements Listener {
     // =====================================================================
 
     public boolean isEnabled() {
-        return enabled;
+        return moduleState == ModuleState.ENABLED;
+    }
+
+    /** @return whether this module was allowed to start by its configuration */
+    public boolean isEnabledByConfiguration() {
+        return enabledByConfiguration;
+    }
+
+    /** @return whether module configuration and static resources were loaded */
+    public boolean isLoaded() {
+        return moduleState != ModuleState.REGISTERED;
+    }
+
+    /** @return whether this module is temporarily suspended */
+    public boolean isPaused() {
+        return moduleState == ModuleState.PAUSED;
+    }
+
+    /** @return current runtime lifecycle state */
+    public ModuleState getModuleState() {
+        return moduleState;
     }
 
     public String getModuleName() {
@@ -588,6 +721,18 @@ public abstract class BaseModule implements Listener {
 
     public String getModuleVersion() {
         return moduleVersion;
+    }
+
+    /**
+     * Checks the module version without exposing string comparison throughout
+     * dependent modules.
+     *
+     * @param expectedVersion exact version expected by the caller
+     * @return true when the current module version matches, ignoring case
+     */
+    public boolean hasVersion(String expectedVersion) {
+        return expectedVersion != null
+                && moduleVersion.equalsIgnoreCase(expectedVersion.trim());
     }
 
     public String getDescription() {
