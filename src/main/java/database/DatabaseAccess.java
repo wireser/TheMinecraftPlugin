@@ -12,6 +12,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.LinkedHashMap;
@@ -150,6 +151,17 @@ public final class DatabaseAccess {
                 ps.setObject(index, value);
             }
         }
+    }
+
+    /**
+     * Adapts convenient varargs calls to the list-based database methods.
+     * The list methods remain the canonical implementation so query building
+     * and parameter binding continue to live in one place.
+     */
+    private List<?> asParameterList(Object... parameters) {
+        return parameters == null
+                ? Collections.emptyList()
+                : Arrays.asList(parameters);
     }
 
     // ======================================================================
@@ -422,6 +434,25 @@ public final class DatabaseAccess {
     }
 
     /**
+     * Convenience overload that accepts WHERE parameters directly.
+     *
+     * @param table table name
+     * @param setColumns columns to update
+     * @param setValues replacement values
+     * @param whereClause optional WHERE clause using {@code ?} placeholders
+     * @param whereParams values bound to the WHERE placeholders
+     * @return number of affected rows
+     * @throws SQLException if the database operation fails
+     */
+    public int update(String table,
+                      List<String> setColumns,
+                      List<?> setValues,
+                      String whereClause,
+                      Object... whereParams) throws SQLException {
+        return update(table, setColumns, setValues, whereClause, asParameterList(whereParams));
+    }
+
+    /**
      * Executes a DELETE on the given table.
      *
      * @param table       table name
@@ -441,6 +472,11 @@ public final class DatabaseAccess {
         }
 
         return executeUpdate(sql.toString(), params);
+    }
+
+    /** Convenience overload that accepts DELETE parameters directly. */
+    public int delete(String table, String whereClause, Object... params) throws SQLException {
+        return delete(table, whereClause, asParameterList(params));
     }
 
     /**
@@ -589,6 +625,11 @@ public final class DatabaseAccess {
 
     public String getString(String table, String column, String whereClause, List<?> params) throws SQLException {
         return getSingleValue(table, column, whereClause, params, rs -> rs.getString(1));
+    }
+
+    /** Convenience overload that accepts query parameters directly. */
+    public String getString(String table, String column, String whereClause, Object... params) throws SQLException {
+        return getString(table, column, whereClause, asParameterList(params));
     }
 
     public String getRandomString(String table, String column, String whereClause, List<?> params) throws SQLException {

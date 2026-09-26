@@ -18,3 +18,87 @@ command:
 economy:
   balance: "&e>> Your current bank balance is &f%1&e, safely stored until you need it."
   wallet: "&e>> You currently have &f%1 &eavailable to spend from your wallet."
+
+locations:
+  spawn:
+    unavailable: "&5The road to spawn has gone quiet. Its anchor may be missing."
+    teleport_failed: "&cThe path opened, then cast you back where you stood."
+    teleported: "&dThe world folds around you, returning you to spawn."
+    saved: "&aServer spawn updated."
+    save_failed: "&cServer spawn could not be updated. Check the console."
+  last:
+    restored: "&7The world remembers where you left it."
+
+players:
+  data_update_failed: "&cThat change could not be saved. Nothing was changed; please try again."
+  player_not_found: "&cNo player named &f%1 &chas ever passed through this server."
+  cannot_target_self: "&cYou cannot use that on yourself."
+  menu_coming_soon: "&7The &f%1 &7menu is still being built. The command form already works."
+
+  trust:
+    added: "&aYou now trust &f%1&a with your protected spaces."
+    added_target: "&e%1 has trusted you with their protected spaces."
+    already_trusted: "&e%1 is already on your trust list."
+    friend_already_trusted: "&e%1 is your friend, so they already receive trusted access."
+    removed: "&e%1 has been removed from your trust list."
+    removed_target: "&7%1 has removed your explicit trusted access."
+    not_trusted: "&e%1 is not on your trust list."
+    friend_access_remains: "&e%1 is not explicitly trusted; your friendship still grants them access."
+
+  friend:
+    pending_notice: "&eYou have &f%1 &epending friend request(s). View them with &f/list friends&e."
+    request_sent: "&aYour friend request is on its way to &f%1&a."
+    request_received: "&e%1 would like to be your friend. Use &f/friend %1 &eto accept."
+    already_requested: "&eYour friend request to &f%1 &eis still waiting for an answer."
+    already_friends: "&eYou and &f%1 &eare already friends."
+    accepted: "&aYou accepted &f%1&a's friend request. You now trust one another."
+    accepted_target: "&a%1 accepted your friend request. You now trust one another."
+    no_relationship: "&eThere is no friendship or pending request between you and &f%1&e."
+    removed: "&eYou and &f%1 &eare no longer friends."
+    removed_target: "&7%1 has removed you from their friends."
+    request_cancelled: "&eYour friend request to &f%1 &ehas been cancelled."
+    request_cancelled_target: "&7%1 cancelled their pending friend request."
+    request_declined: "&eYou declined &f%1&e's friend request."
+    request_declined_target: "&7%1 declined your friend request."
+
+  list:
+    none: "nobody"
+    available_basic: "&eAvailable lists: &fonline&e, &fstaff&e."
+    available_player: "&eAvailable lists: &ftrust&e, &ffriends&e, &fonline&e, &fstaff&e."
+    unknown: "&cThere is no player list named &f%1&c."
+    trust: "&ePlayers you explicitly trust: &f%1"
+    friends: "&eFriends: &f%1"
+    incoming: "&eIncoming friend requests: &f%1"
+    outgoing: "&eSent friend requests: &f%1"
+    online: "&ePlayers online: &f%1"
+    staff: "&eStaff online: &f%1"
+
+  nick:
+    own: "&eAround here, people know you as %1&e."
+    own_unset: "&eYou do not have a nickname yet. A moderator can set one for you."
+    target: "&e%1 is known around here as %2&e."
+    target_unset: "&e%1 does not have a nickname."
+    invalid: "&cThat nickname is not valid for the %1 group. Use 3-20 letters, numbers, dots or underscores; begin and end with a letter or number; and use no more than three dots/underscores."
+    matches_username: "&cThat nickname belongs to the registered Minecraft username &f%1&c."
+    already_used: "&cThat nickname is already held by &f%1&c, regardless of its colors or capitalization."
+    set: "&aNickname updated for &f%1&a: %2"
+    set_target: "&eYour nickname has been set to %1&e."
+    already_unset: "&e%1 does not have a nickname to reset."
+    reset: "&aNickname reset for &f%1&a."
+    reset_target: "&e%1 reset your nickname. Your Minecraft username will be shown instead."
+
+  welcome:
+    no_recent_player: "&7Nobody has joined since the Players module started."
+    player_not_online: "&c%1 is not online to receive a welcome."
+    help_player: "&eUse &f/welcome &eto greet the latest arrival, or &f/welcome <player> &efor someone online."
+    help_staff: "&ePlayer use: &f/welcome [player]&e. Staff: &f/welcome show|set|reset <username> [message]&e."
+    saved_unset: "&e%1 does not have a personal join welcome."
+    saved_prefix: "&e%1's personal join welcome: &f"
+    invalid: "&cA personal welcome must contain 1-70 characters across no more than two non-empty lines."
+    set: "&aPersonal join welcome updated for &f%1&a."
+    reset: "&aPersonal join welcome cleared for &f%1&a."
+    random:
+      1: "&d%1 has stepped back into the story. Welcome them home!"
+      2: "&eA familiar path lights up—%1 has arrived. Say hello!"
+      3: "&bMake a little room by the fire; %1 has joined us."
+      4: "&aThe gates are open and %1 is here. Welcome!"

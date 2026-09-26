@@ -1,9 +1,7 @@
 package playerdata;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -16,13 +14,18 @@ import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
+import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
 import org.bukkit.inventory.ItemStack;
 
-import enums.Currency;
+import enums.FriendshipStatus;
+import enums.GroupType;
+import enums.NicknameFormattingLevel;
 import enums.Perm;
 import model.Group;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import utils.TextComponentParser;
+import utils.Validator;
 
 /**
  * Represents a player inside the plugin domain.
@@ -55,12 +58,9 @@ import net.kyori.adventure.text.format.NamedTextColor;
  * <ul>
  *     <li>nickname</li>
  *     <li>permission flags</li>
- *     <li>balances</li>
  *     <li>reply target</li>
  *     <li>welcome message</li>
  *     <li>friends</li>
- *     <li>trusted players</li>
- *     <li>ignored players</li>
  *     <li>statistics after their first access</li>
  * </ul>
  *
@@ -145,14 +145,6 @@ public final class Profile {
     // ======================================================================
 
     /**
-     * Cached balances keyed by currency.
-     *
-     * <p>Fully populated when an online profile is created.</p>
-     */
-    private final EnumMap<Currency, BigDecimal> balances =
-            new EnumMap<>(Currency.class);
-
-    /**
      * Cached reply target for online profiles.
      */
     private Integer replyTargetId;
@@ -180,9 +172,8 @@ public final class Profile {
     /**
      * Lazy stat cache.
      *
-     * <p>Unlike balances, arbitrary stat keys are not known ahead of time.
-     * Therefore a stat is loaded on first access and then retained for the
-     * remainder of the online session.</p>
+     * <p>Arbitrary stat keys are not known ahead of time. Therefore a stat is
+     * loaded on first access and retained for the remainder of the session.</p>
      */
     private final Map<String, Long> statCache = new HashMap<>();
 
@@ -245,22 +236,7 @@ public final class Profile {
      * <p>Calling this method for a temporary offline profile does nothing.</p>
      */
     void loadOnlineCache() {
-        if (!onlineCacheEnabled) {
-            return;
-        }
-
-        /*
-         * Balances are ideal cache candidates:
-         * small fixed key set and potentially very frequent reads.
-         */
-        balances.clear();
-
-        for (Currency currency : Currency.values()) {
-            balances.put(
-                    currency,
-                    storage.getBalance(this, currency)
-            );
-        }
+        if (!onlineCacheEnabled) return;
 
         /*
          * Tiny player-table values that may be used repeatedly by commands.
@@ -279,13 +255,9 @@ public final class Profile {
         trustedIds.clear();
         trustedIds.addAll(storage.getTrustedIds(this));
 
-        ignoredIds.clear();
-        ignoredIds.addAll(storage.getIgnoredIds(this));
+        /* Ignore storage still uses its older schema and is not part of this change. */
 
-        /*
-         * Arbitrary stats are lazy-loaded, so refreshing invalidates anything
-         * previously remembered.
-         */
+        // Arbitrary stats are lazy-loaded; refreshing invalidates remembered values.
         statCache.clear();
     }
 
@@ -370,16 +342,37 @@ public final class Profile {
      * is changed. The storage method required by this function is included
      * below this class.</p>
      *
-     * @param nick new nickname, or {@code null}/blank to remove it
+     * @param nickname new nickname, or {@code null}/blank to remove it
+     * @param formattingLevel color syntax available to the nickname owner
+     * @return {@code true} when persistence and the live cache were updated
      */
-    public void setNick(String nick) {
-        String normalized =
-                nick == null || nick.isBlank()
-                        ? null
-                        : nick;
+    public boolean setNick(String nickname, NicknameFormattingLevel formattingLevel) {
+        String formattedNickname = nickname == null || nickname.isBlank() ? null : nickname;
+        String plainNickname = formattedNickname == null
+                ? null
+                : Validator.normalizeNicknameForLookup(formattedNickname);
 
-        storage.setNick(this, normalized);
-        this.nick = normalized;
+        if (formattedNickname != null
+                && !Validator.isValidNickname(formattedNickname, formattingLevel)) return false;
+        if (!storage.setNick(this, formattedNickname, plainNickname)) return false;
+
+        this.nick = formattedNickname;
+        return true;
+    }
+
+    /**
+     * Clears an online nickname after a joining account claims the same real
+     * Minecraft username. Persistence has already been updated by storage.
+     */
+    void clearCachedNickname() {
+        this.nick = null;
+    }
+
+    /**
+     * @return visible nickname without colors, or {@code null} when unset
+     */
+    public String getPlainNick() {
+        return Validator.stripNicknameColors(nick);
     }
 
     /**
@@ -398,13 +391,13 @@ public final class Profile {
      *
      * <p>The nickname is evaluated when this method is called rather than
      * storing a second immutable component that could become stale after
-     * {@link #setNick(String)}.</p>
+     * {@link #setNick(String, NicknameFormattingLevel)}.</p>
      *
      * @return nickname if present, otherwise Minecraft username
      */
     public Component getDisplayName() {
         if (nick != null && !nick.isBlank()) {
-            return Component.text(nick);
+            return TextComponentParser.toComponent(nick);
         }
 
         return getNameComponent();
@@ -424,6 +417,17 @@ public final class Profile {
      */
     public void setGroup(Group group) {
         this.group = group;
+    }
+
+    /**
+     * Checks rank inheritance without relying on numeric group IDs.
+     *
+     * @param minimumGroup lowest group accepted by the operation
+     * @return {@code true} when this profile belongs to that group or a child
+     */
+    public boolean meetsMinimumGroup(GroupType minimumGroup) {
+        return group != null && minimumGroup != null
+                && group.inheritsFrom(minimumGroup.getGroup());
     }
 
     // ======================================================================
@@ -539,6 +543,49 @@ public final class Profile {
         return player != null
                 ? player.getLocation()
                 : null;
+    }
+
+    /**
+     * Teleports this online player through the plugin's single teleport
+     * gateway and stores the location they left as {@code back}.
+     *
+     * <p>Gameplay code should use this method instead of calling Bukkit's
+     * teleport methods directly. Teleport restrictions, logging, visual
+     * effects and other shared behaviour can then be added here once and
+     * applied uniformly.</p>
+     *
+     * @param destination destination to which the player should be moved
+     * @return {@code true} only when Bukkit completed the teleport
+     */
+    public boolean teleport(Location destination) {
+        return teleport(destination, true);
+    }
+
+    /**
+     * Teleports without replacing the player's {@code back} location.
+     *
+     * <p>This is an explicit exception for administrative or corrective
+     * movement such as restoring the last logout location, releasing a player
+     * from prison or forcing a player to spawn. Normal player travel should
+     * use {@link #teleport(Location)}.</p>
+     *
+     * @param destination destination to which the player should be moved
+     * @return {@code true} only when Bukkit completed the teleport
+     */
+    public boolean teleportWithoutSavingBack(Location destination) {
+        return teleport(destination, false);
+    }
+
+    /** Performs the common validation and Bukkit teleport operation. */
+    private boolean teleport(Location destination, boolean saveBackLocation) {
+        if (!isOnline() || destination == null
+                || !destination.isWorldLoaded() || !destination.isFinite()) return false;
+
+        Location previousLocation = player.getLocation();
+        boolean teleported = player.teleport(destination, TeleportCause.PLUGIN);
+
+        if (teleported && saveBackLocation) setStoredLocation("back", previousLocation);
+        return teleported;
     }
 
     /**
@@ -724,14 +771,17 @@ public final class Profile {
     }
 
     // ======================================================================
-    // Stored locations
+    // System-managed locations
     // ======================================================================
 
     /**
-     * Loads a named persistent location.
+     * Loads a named system-managed location.
      *
      * <p>Locations remain database-backed because they are normally accessed
      * far less frequently than balances or relationship checks.</p>
+     *
+     * <p>Player-created homes are deliberately separate because they occupy
+     * rows where {@code is_player_home = 1} and have different rules.</p>
      *
      * @param key logical location key
      * @return stored location or null
@@ -745,7 +795,7 @@ public final class Profile {
     }
 
     /**
-     * Stores or removes a named location.
+     * Stores or removes a named system-managed location.
      *
      * @param key logical location key
      * @param location location, or null to delete
@@ -766,7 +816,7 @@ public final class Profile {
     }
 
     /**
-     * Removes a named persistent location.
+     * Removes a named system-managed location.
      *
      * @param key logical location key
      */
@@ -779,131 +829,30 @@ public final class Profile {
     }
 
     // ======================================================================
-    // Balances
-    // ======================================================================
-
-    /**
-     * Returns a currency balance.
-     *
-     * <p>Online profiles read exclusively from the preloaded balance cache.
-     * Offline profiles query persistent storage directly.</p>
-     *
-     * @param currency currency
-     * @return balance, never null
-     */
-    public BigDecimal getBalance(Currency currency) {
-        if (currency == null) {
-            return BigDecimal.ZERO;
-        }
-
-        if (onlineCacheEnabled) {
-            return balances.getOrDefault(
-                    currency,
-                    BigDecimal.ZERO
-            );
-        }
-
-        return storage.getBalance(this, currency);
-    }
-
-    /**
-     * Sets a currency balance.
-     *
-     * <p>Persistence is performed first. The online cache is then updated so
-     * subsequent reads require no database query.</p>
-     *
-     * @param currency currency
-     * @param amount new balance
-     */
-    public void setBalance(
-            Currency currency,
-            BigDecimal amount
-    ) {
-        if (currency == null || amount == null) {
-            return;
-        }
-
-        storage.setBalance(this, currency, amount);
-
-        if (onlineCacheEnabled) {
-            balances.put(currency, amount);
-        }
-    }
-
-    /**
-     * Adds a delta to a balance.
-     *
-     * @param currency currency
-     * @param delta amount to add; may be negative
-     */
-    public void addBalance(
-            Currency currency,
-            BigDecimal delta
-    ) {
-        if (currency == null
-                || delta == null
-                || delta.signum() == 0) {
-            return;
-        }
-
-        storage.addBalance(this, currency, delta);
-
-        if (onlineCacheEnabled) {
-            balances.merge(
-                    currency,
-                    delta,
-                    BigDecimal::add
-            );
-        }
-    }
-
-    /**
-     * Subtracts a positive amount from a balance.
-     *
-     * @param currency currency
-     * @param delta amount to subtract
-     */
-    public void subBalance(
-            Currency currency,
-            BigDecimal delta
-    ) {
-        if (currency == null
-                || delta == null
-                || delta.signum() <= 0) {
-            return;
-        }
-
-        addBalance(currency, delta.negate());
-    }
-
-    // ======================================================================
     // Reply target / welcome
     // ======================================================================
 
     /**
-     * Returns the stored reply target.
+     * Returns the last player this profile can answer with {@code /reply}.
      *
-     * @return database player id or null
+     * @return target {@code players.id}, or {@code null} when unset
      */
     public Integer getReplyTargetId() {
-        if (onlineCacheEnabled) {
-            return replyTargetId;
-        }
-
-        return storage.getReplyTargetId(this);
+        return onlineCacheEnabled ? replyTargetId : storage.getReplyTargetId(this);
     }
 
     /**
-     * Changes the reply target.
+     * Changes and immediately persists the {@code /reply} target.
      *
-     * @param targetId target database player id, or null to clear
+     * @param targetId target {@code players.id}, or {@code null} to clear it
+     * @return {@code true} when persistence and the live cache were updated
      */
-    public void setReplyTargetId(Integer targetId) {
-        storage.setReplyTargetId(this, targetId);
+    public boolean setReplyTargetId(Integer targetId) {
+        if (targetId != null && (targetId <= 0 || targetId == id)) return false;
+        if (!storage.setReplyTargetId(this, targetId)) return false;
 
-        if (onlineCacheEnabled) {
-            this.replyTargetId = targetId;
-        }
+        if (onlineCacheEnabled) this.replyTargetId = targetId;
+        return true;
     }
 
     /**
@@ -912,24 +861,27 @@ public final class Profile {
      * @return message or null
      */
     public String getWelcome() {
-        if (onlineCacheEnabled) {
-            return welcome;
-        }
-
-        return storage.getWelcome(this);
+        return onlineCacheEnabled ? welcome : storage.getWelcome(this);
     }
 
     /**
      * Changes the player's welcome message.
      *
+     * <p>Welcome text is normalized and validated before the database or RAM
+     * cache is changed.</p>
+     *
      * @param welcome new message or null
+     * @return {@code true} when persistence and the live cache were updated
      */
-    public void setWelcome(String welcome) {
-        storage.setWelcome(this, welcome);
+    public boolean setWelcome(String welcome) {
+        String normalizedWelcome = welcome == null || welcome.isBlank()
+                ? null
+                : Validator.normalizeWelcomeMessage(welcome);
+        if (normalizedWelcome != null && !Validator.isValidWelcomeMessage(normalizedWelcome)) return false;
+        if (!storage.setWelcome(this, normalizedWelcome)) return false;
 
-        if (onlineCacheEnabled) {
-            this.welcome = welcome;
-        }
+        if (onlineCacheEnabled) this.welcome = normalizedWelcome;
+        return true;
     }
 
     // ======================================================================
@@ -967,45 +919,83 @@ public final class Profile {
     // ======================================================================
 
     /**
-     * Adds another player to this profile's friend list.
+     * Sends a friend request or accepts the other player's pending request.
      *
-     * @param other target profile
+     * <p>Sending a request back to somebody who already requested friendship
+     * is treated as acceptance. Repeating an outgoing request or requesting an
+     * existing friend makes no database change and returns the current state.</p>
+     *
+     * @param other player receiving the request
+     * @return relationship state after the operation
      */
-    public void addFriend(Profile other) {
-        if (!isValidRelationTarget(other)) {
-            return;
+    public FriendshipStatus sendFriendRequest(Profile other) {
+        if (!isValidRelationTarget(other)) return FriendshipStatus.NONE;
+
+        FriendshipStatus currentStatus = storage.getFriendshipStatus(this, other.getId());
+
+        if (currentStatus == FriendshipStatus.INCOMING_REQUEST) {
+            if (!storage.acceptFriendRequest(this, other.getId())) {
+                return storage.getFriendshipStatus(this, other.getId());
+            }
+
+            cacheAcceptedFriendship(other);
+            return FriendshipStatus.ACCEPTED;
         }
 
-        int targetId = other.getId();
-
-        if (onlineCacheEnabled && friendIds.contains(targetId)) {
-            return;
+        if (currentStatus == FriendshipStatus.NONE) {
+            return storage.createFriendRequest(this, other.getId())
+                    ? FriendshipStatus.OUTGOING_REQUEST
+                    : storage.getFriendshipStatus(this, other.getId());
         }
 
-        storage.addFriend(this, targetId);
-
-        if (onlineCacheEnabled) {
-            friendIds.add(targetId);
-        }
+        return currentStatus;
     }
 
     /**
-     * Removes another player from the friend list.
+     * Accepts a pending request sent by the supplied player.
      *
-     * @param other target profile
+     * @param requester player who sent the request
+     * @return {@code true} only when a pending request was accepted
      */
-    public void removeFriend(Profile other) {
-        if (!isValidRelationTarget(other)) {
-            return;
-        }
+    public boolean acceptFriendRequest(Profile requester) {
+        if (!isValidRelationTarget(requester)) return false;
+        if (storage.getFriendshipStatus(this, requester.getId())
+                != FriendshipStatus.INCOMING_REQUEST) return false;
+        if (!storage.acceptFriendRequest(this, requester.getId())) return false;
 
-        int targetId = other.getId();
+        cacheAcceptedFriendship(requester);
+        return true;
+    }
 
-        storage.removeFriend(this, targetId);
+    /**
+     * Deletes the shared relationship row.
+     *
+     * <p>This supports declining an incoming request, cancelling an outgoing
+     * request and removing an accepted friend. The future command handler can
+     * inspect {@link #getFriendshipStatus(Profile)} first to choose its message.</p>
+     *
+     * @param other other participant
+     * @return {@code true} when an existing row was deleted
+     */
+    public boolean deleteFriendship(Profile other) {
+        if (!isValidRelationTarget(other)) return false;
+        if (!storage.deleteFriendship(this, other.getId())) return false;
 
-        if (onlineCacheEnabled) {
-            friendIds.remove(targetId);
-        }
+        if (onlineCacheEnabled) friendIds.remove(other.getId());
+        if (other.onlineCacheEnabled) other.friendIds.remove(id);
+        return true;
+    }
+
+    /**
+     * Returns the friendship state relative to this profile.
+     *
+     * @param other other participant
+     * @return current relationship state
+     */
+    public FriendshipStatus getFriendshipStatus(Profile other) {
+        if (!isValidRelationTarget(other)) return FriendshipStatus.NONE;
+        if (onlineCacheEnabled && friendIds.contains(other.getId())) return FriendshipStatus.ACCEPTED;
+        return storage.getFriendshipStatus(this, other.getId());
     }
 
     /**
@@ -1015,18 +1005,10 @@ public final class Profile {
      * @return true when present
      */
     public boolean isFriendWith(Profile other) {
-        if (!isValidRelationTarget(other)) {
-            return false;
-        }
-
-        if (onlineCacheEnabled) {
-            return friendIds.contains(other.getId());
-        }
-
-        return storage.isFriend(
-                this.id,
-                other.getId()
-        );
+        return isValidRelationTarget(other)
+                && (onlineCacheEnabled
+                        ? friendIds.contains(other.getId())
+                        : storage.getFriendshipStatus(this, other.getId()) == FriendshipStatus.ACCEPTED);
     }
 
     /**
@@ -1035,11 +1017,23 @@ public final class Profile {
      * @return friend ids
      */
     public List<Integer> getFriendIds() {
-        if (onlineCacheEnabled) {
-            return List.copyOf(friendIds);
-        }
+        return onlineCacheEnabled ? List.copyOf(friendIds) : storage.getFriendIds(this);
+    }
 
-        return storage.getFriendIds(this);
+    /** @return IDs of players whose requests are waiting for this player */
+    public List<Integer> getIncomingFriendRequestIds() {
+        return storage.getIncomingFriendRequestIds(this);
+    }
+
+    /** @return IDs of players who have not answered this player's requests */
+    public List<Integer> getOutgoingFriendRequestIds() {
+        return storage.getOutgoingFriendRequestIds(this);
+    }
+
+    /** Updates both live profile caches after friendship acceptance. */
+    private void cacheAcceptedFriendship(Profile other) {
+        if (onlineCacheEnabled) friendIds.add(other.getId());
+        if (other.onlineCacheEnabled) other.friendIds.add(id);
     }
 
     // ======================================================================
@@ -1050,42 +1044,34 @@ public final class Profile {
      * Adds another profile to this player's trust list.
      *
      * @param other target profile
+     * @return {@code true} when a new explicit trust row was stored
      */
-    public void addTrustedPlayer(Profile other) {
-        if (!isValidRelationTarget(other)) {
-            return;
-        }
+    public boolean addTrustedPlayer(Profile other) {
+        if (!isValidRelationTarget(other)) return false;
 
         int targetId = other.getId();
 
-        if (onlineCacheEnabled && trustedIds.contains(targetId)) {
-            return;
-        }
+        if (onlineCacheEnabled && trustedIds.contains(targetId)) return false;
+        if (!storage.addTrusted(this, targetId)) return false;
 
-        storage.addTrusted(this, targetId);
-
-        if (onlineCacheEnabled) {
-            trustedIds.add(targetId);
-        }
+        if (onlineCacheEnabled) trustedIds.add(targetId);
+        return true;
     }
 
     /**
      * Removes another profile from this player's trust list.
      *
      * @param other target profile
+     * @return {@code true} when an explicit trust row was removed
      */
-    public void removeTrustedPlayer(Profile other) {
-        if (!isValidRelationTarget(other)) {
-            return;
-        }
+    public boolean removeTrustedPlayer(Profile other) {
+        if (!isValidRelationTarget(other)) return false;
 
         int targetId = other.getId();
+        if (!storage.removeTrusted(this, targetId)) return false;
 
-        storage.removeTrusted(this, targetId);
-
-        if (onlineCacheEnabled) {
-            trustedIds.remove(targetId);
-        }
+        if (onlineCacheEnabled) trustedIds.remove(targetId);
+        return true;
     }
 
     /**
@@ -1122,6 +1108,15 @@ public final class Profile {
     public boolean isTrustedBy(Profile owner) {
         return owner != null
                 && owner.isTrustingPlayer(this);
+    }
+
+    /**
+     * Checks effective build/container access granted through either explicit
+     * one-way trust or an accepted friendship.
+     */
+    public boolean allowsTrustedAccess(Profile other) {
+        return isValidRelationTarget(other)
+                && (isTrustingPlayer(other) || isFriendWith(other));
     }
 
     /**

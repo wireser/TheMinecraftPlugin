@@ -85,6 +85,26 @@ public final class Group {
         return parent;
     }
 
+    /**
+     * Checks whether this group is the required group or inherits from it.
+     *
+     * <p>The inheritance chain is authoritative. Numeric database IDs are not
+     * treated as permission levels merely because they currently increase in
+     * the same order.</p>
+     *
+     * @param requiredGroup lowest group that should be accepted
+     * @return {@code true} when this group contains the required access
+     */
+    public boolean inheritsFrom(Group requiredGroup) {
+        if (requiredGroup == null) return false;
+
+        for (Group current = this; current != null; current = current.parent) {
+            if (current == requiredGroup) return true;
+        }
+
+        return false;
+    }
+
     public String getPrefix() {
         return prefix;
     }
