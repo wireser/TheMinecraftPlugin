@@ -1,22 +1,22 @@
 package playerdata;
 
-import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
-import org.bukkit.World;
 
 import database.DatabaseAccess;
-import enums.Currency;
+import enums.FriendshipStatus;
 import enums.GroupType;
 import enums.Perm;
+import utils.LocationSerializer;
 
 /**
  * Centralized data access for all profile-related persistence.
@@ -24,8 +24,7 @@ import enums.Perm;
  * This class encapsulates all SQL interaction for player-specific data:
  * <ul>
  *     <li>Stored locations</li>
- *     <li>Balances</li>
- *     <li>Reply target, welcome message</li>
+ *     <li>Nickname, reply target and welcome message</li>
  *     <li>Social lists (friends, trust, ignore)</li>
  *     <li>Settings</li>
  *     <li>Stats</li>
@@ -37,6 +36,11 @@ import enums.Perm;
  * through this class, rather than being duplicated across modules.
  */
 public final class ProfileStorage {
+
+    private static final String PLAYER_LOCATION_TABLE = "player_locations";
+    private static final String PLAYER_PROFILE_DATA_TABLE = "player_profile_data";
+    private static final String PLAYER_TRUST_TABLE = "player_trust";
+    private static final String PLAYER_FRIENDSHIP_TABLE = "player_friendships";
 
     private final DatabaseAccess db;
     private final Logger logger;
@@ -92,196 +96,99 @@ public final class ProfileStorage {
      * @return valid {@code players.id}, or {@code 0} if resolution/creation fails
      */
     public int getOrCreatePlayerId(UUID uuid, String name) {
-
-        // A usable database player must always have both a UUID and a name.
         if (uuid == null || name == null || name.isBlank()) {
-            logger.warning(
-                    "ProfileStorage: cannot resolve/create player id because UUID or name is invalid."
-            );
+            logger.warning("ProfileStorage: cannot resolve player because UUID or name is invalid.");
             return 0;
         }
 
-        /*
-         * First attempt to resolve an existing player.
-         *
-         * findIdByUuid(UUID) already exists in ProfileStorage and returns
-         * players.id or null when no matching row exists.
-         */
-        Integer existingId = findIdByUuid(uuid);
+        Integer playerId = findIdByUuid(uuid);
 
-        if (existingId != null && existingId > 0) {
-
-            /*
-             * The UUID identifies the Minecraft account permanently, but the
-             * username can change.
-             *
-             * Keep players.name synchronized whenever the player joins.
-             */
-            String storedName = getIgn(existingId);
-
-            if (storedName == null || !storedName.equals(name)) {
-                try {
-                    db.update(
-                            "players",
-                            List.of("name"),
-                            List.of(name),
-                            "id = ?",
-                            List.of(existingId)
-                    );
-
-                    logger.info(
-                            "Updated player name for playerId="
-                            + existingId
-                            + ": "
-                            + storedName
-                            + " -> "
-                            + name
-                    );
-
-                } catch (SQLException e) {
-                    /*
-                     * Failing to update the name does not invalidate the player's
-                     * existing database id, so we still return existingId below.
-                     */
-                    logger.severe(
-                            "Failed to update player name for playerId="
-                            + existingId
-                            + ": "
-                            + e.getMessage()
-                    );
-
-                    e.printStackTrace();
-                }
+        if (playerId == null) {
+            try {
+                /* Name is claimed afterwards so a recycled username can be released first. */
+                db.insert("players", List.of("uuid"), List.of(uuid.toString()));
+                playerId = findIdByUuid(uuid);
+            } catch (SQLException exception) {
+                logger.log(Level.SEVERE, "Failed to create player record for " + name
+                        + " (" + uuid + ").", exception);
+                return 0;
             }
 
-            return existingId;
+            if (playerId == null || playerId <= 0) {
+                logger.severe("Created player record for " + name
+                        + " but could not resolve its generated id.");
+                return 0;
+            }
+
+            logger.info("Created player database record: " + name + " -> playerId=" + playerId);
         }
 
-        /*
-         * No row exists for this UUID.
-         *
-         * This is therefore the player's first registration in our database.
-         *
-         * Only UUID and name are required here. Other players-table columns
-         * should either have database defaults or allow NULL.
-         */
+        if (!claimCurrentUsername(playerId, name) || !ensurePlayerProfileDataRow(playerId)) {
+            return 0;
+        }
+
+        return playerId;
+    }
+
+    /**
+     * Gives the joining UUID ownership of its current Minecraft username.
+     *
+     * <p>A real account name outranks a nickname. Any matching nickname owned
+     * by another player is cleared before the username is assigned.</p>
+     */
+    private boolean claimCurrentUsername(int playerId, String username) {
         try {
-            db.insert(
-                    "players",
-                    List.of(
-                            "uuid",
-                            "name"
-                    ),
-                    List.of(
-                            uuid.toString(),
-                            name
-                    )
-            );
+            Integer conflictingNicknameOwnerId = db.getInt(
+                    PLAYER_PROFILE_DATA_TABLE, "player_id",
+                    "nickname_plain = ? AND player_id <> ?", List.of(username, playerId));
 
-        } catch (SQLException e) {
-            logger.severe(
-                    "Failed to create players row for "
-                    + name
-                    + " ("
-                    + uuid
-                    + "): "
-                    + e.getMessage()
-            );
+            if (conflictingNicknameOwnerId != null) {
+                db.update(PLAYER_PROFILE_DATA_TABLE,
+                        List.of("nickname_formatted", "nickname_plain"),
+                        java.util.Arrays.asList(null, null),
+                        "player_id = ?", conflictingNicknameOwnerId);
+                logger.info("Cleared nickname owned by playerId=" + conflictingNicknameOwnerId
+                        + " because the Minecraft username '" + username + "' was claimed.");
+            }
 
-            e.printStackTrace();
+            db.update("players", List.of("name"), Collections.singletonList(null),
+                    "name = ? AND id <> ?", username, playerId);
 
-            return 0;
+            return db.update("players", List.of("name", "last_login_at"),
+                    List.of(username, LocalDateTime.now()), "id = ?", playerId) == 1;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to claim username '" + username
+                    + "' for playerId=" + playerId + ".", exception);
+            return false;
         }
+    }
 
-        /*
-         * DatabaseAccess.insert() does not currently give ProfileStorage the
-         * generated AUTO_INCREMENT id directly.
-         *
-         * Therefore, after inserting the row, resolve players.id using the UUID.
-         *
-         * This extra lookup happens only when the player is first registered.
-         */
-        Integer createdId = findIdByUuid(uuid);
-
-        if (createdId == null || createdId <= 0) {
-            logger.severe(
-                    "Created players row for "
-                    + name
-                    + " ("
-                    + uuid
-                    + "), but could not resolve its players.id afterwards."
-            );
-
-            return 0;
+    /** Creates the one-to-one profile-data row required by core profile fields. */
+    private boolean ensurePlayerProfileDataRow(int playerId) {
+        try {
+            db.insertIfAbsent(PLAYER_PROFILE_DATA_TABLE,
+                    List.of("player_id"), List.of(playerId));
+            return true;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to create profile data for playerId="
+                    + playerId + ".", exception);
+            return false;
         }
-
-        logger.info(
-                "Created player database record: "
-                + name
-                + " -> playerId="
-                + createdId
-        );
-
-        return createdId;
     }
     
     // ======================================================================
     // Locations
     // ======================================================================
 
-    /*
-     * For locations, we store a single serialized string in the column `location`,
-     * formatted as:
-     *
-     *   worldName;x;y;z;yaw;pitch
-     *
-     * This keeps the DB schema simple and flexible.
-     */
-
-    private String serializeLocation(Location loc) {
-        if (loc == null || loc.getWorld() == null) {
-            return null;
-        }
-        return String.format(
-                "%s;%f;%f;%f;%f;%f",
-                loc.getWorld().getName(),
-                loc.getX(),
-                loc.getY(),
-                loc.getZ(),
-                loc.getYaw(),
-                loc.getPitch()
-        );
-    }
-
-    private Location deserializeLocation(String data) {
-        if (data == null || data.isEmpty()) {
-            return null;
-        }
-        String[] parts = data.split(";");
-        if (parts.length < 6) {
-            return null;
-        }
-        World world = Bukkit.getWorld(parts[0]);
-        if (world == null) {
-            return null;
-        }
-        try {
-            double x = Double.parseDouble(parts[1]);
-            double y = Double.parseDouble(parts[2]);
-            double z = Double.parseDouble(parts[3]);
-            float yaw = Float.parseFloat(parts[4]);
-            float pitch = Float.parseFloat(parts[5]);
-            return new Location(world, x, y, z, yaw, pitch);
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-
     /**
      * Retrieves a stored location for the given profile and key.
      *
+     * <p>This method addresses system-managed locations only. Player homes
+     * use the same table with {@code is_player_home = 1}, but will receive a
+     * separate API when home behaviour is implemented.</p>
+     *
      * @param profile profile whose location to load
-     * @param key     logical key (e.g. "home:main", "death", "back")
+     * @param key system location name, such as {@code death} or {@code last}
      * @return stored location, or {@code null} if none is present or an error occurs
      */
     public Location getLocation(Profile profile, String key) {
@@ -290,16 +197,23 @@ public final class ProfileStorage {
         }
         try {
             String data = db.getString(
-                    "players_locations",
-                    "location",
-                    "player_id = ? AND `key` = ?",
-                    List.of(profile.getId(), key)
+                    PLAYER_LOCATION_TABLE,
+                    "location_data",
+                    "player_id = ? AND is_player_home = ? AND location_name = ?",
+                    profile.getId(), false, key
             );
-            return deserializeLocation(data);
-        } catch (SQLException e) {
-            logger.severe("Failed to load location '" + key + "' for playerId="
-                    + profile.getId() + ": " + e.getMessage());
-            e.printStackTrace();
+            return LocationSerializer.deserialize(data);
+        } catch (SQLException exception) {
+            logger.log(
+                    Level.SEVERE,
+                    "Failed to load location '"
+                            + key
+                            + "' for playerId="
+                            + profile.getId()
+                            + ": "
+                            + exception.getMessage(),
+                    exception
+            );
             return null;
         }
     }
@@ -308,7 +222,7 @@ public final class ProfileStorage {
      * Stores or updates a location for the given profile and key.
      *
      * @param profile  profile whose location to store
-     * @param key      logical key
+     * @param key system location name
      * @param location location value, may be {@code null} in which case the
      *                 entry is deleted
      */
@@ -321,34 +235,58 @@ public final class ProfileStorage {
             return;
         }
 
-        String data = serializeLocation(location);
+        String data = LocationSerializer.serialize(location);
         if (data == null) {
-            deleteLocation(profile, key);
+            logger.warning(
+                    "Refused to store invalid location '"
+                            + key
+                            + "' for playerId="
+                            + profile.getId()
+            );
             return;
         }
 
         try {
-            // Try UPDATE first
-            int updated = db.update(
-                    "players_locations",
-                    List.of("location"),
-                    List.of(data),
-                    "player_id = ? AND `key` = ?",
-                    List.of(profile.getId(), key)
+            db.insertIfAbsent(
+                    PLAYER_LOCATION_TABLE,
+                    List.of(
+                            "player_id",
+                            "is_player_home",
+                            "location_name",
+                            "location_data"
+                    ),
+                    List.of(
+                            profile.getId(),
+                            false,
+                            key,
+                            data
+                    )
             );
 
-            if (updated == 0) {
-                // No existing row -> INSERT
-                db.insert(
-                        "players_locations",
-                        List.of("player_id", "key", "location"),
-                        List.of(profile.getId(), key, data)
-                );
-            }
-        } catch (SQLException e) {
-            logger.severe("Failed to store location '" + key + "' for playerId="
-                    + profile.getId() + ": " + e.getMessage());
-            e.printStackTrace();
+            db.update(
+                    PLAYER_LOCATION_TABLE,
+                    List.of(
+                            "location_data",
+                            "recorded_at"
+                    ),
+                    List.of(
+                            data,
+                            LocalDateTime.now()
+                    ),
+                    "player_id = ? AND is_player_home = ? AND location_name = ?",
+                    profile.getId(), false, key
+            );
+        } catch (SQLException exception) {
+            logger.log(
+                    Level.SEVERE,
+                    "Failed to store location '"
+                            + key
+                            + "' for playerId="
+                            + profile.getId()
+                            + ": "
+                            + exception.getMessage(),
+                    exception
+            );
         }
     }
 
@@ -356,7 +294,7 @@ public final class ProfileStorage {
      * Deletes a stored location for the given profile and key.
      *
      * @param profile profile whose location to delete
-     * @param key     logical key
+     * @param key system location name
      */
     public void deleteLocation(Profile profile, String key) {
         if (!ensureValidId(profile, "deleteLocation(" + key + ")")) {
@@ -364,136 +302,21 @@ public final class ProfileStorage {
         }
         try {
             db.delete(
-                    "players_locations",
-                    "player_id = ? AND `key` = ?",
-                    List.of(profile.getId(), key)
+                    PLAYER_LOCATION_TABLE,
+                    "player_id = ? AND is_player_home = ? AND location_name = ?",
+                    profile.getId(), false, key
             );
-        } catch (SQLException e) {
-            logger.severe("Failed to delete location '" + key + "' for playerId="
-                    + profile.getId() + ": " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    // ======================================================================
-    // Balances (BigDecimal)
-    // ======================================================================
-
-    /**
-     * Converts a {@link Currency} enum to the string key used in the database.
-     *
-     * @param currency currency enum
-     * @return non-null key string
-     */
-    private String currencyKey(Currency currency) {
-        // Adjust if your Currency enum has a dedicated key accessor
-        return currency.name().toLowerCase();
-    }
-
-    /**
-     * Loads the balance for a specific currency.
-     *
-     * @param profile  profile whose balance to load
-     * @param currency currency key
-     * @return non-null {@link BigDecimal} amount (zero if none is stored or an error occurs)
-     */
-    public BigDecimal getBalance(Profile profile, Currency currency) {
-        if (!ensureValidId(profile, "getBalance(" + currency + ")")) {
-            return BigDecimal.ZERO;
-        }
-        if (currency == null) {
-            return BigDecimal.ZERO;
-        }
-
-        try {
-            String raw = db.getString(
-                    "players_balances",
-                    "value",
-                    "player_id = ? AND `key` = ?",
-                    List.of(profile.getId(), currencyKey(currency))
+        } catch (SQLException exception) {
+            logger.log(
+                    Level.SEVERE,
+                    "Failed to delete location '"
+                            + key
+                            + "' for playerId="
+                            + profile.getId()
+                            + ": "
+                            + exception.getMessage(),
+                    exception
             );
-            if (raw == null) {
-                return BigDecimal.ZERO;
-            }
-            return new BigDecimal(raw);
-        } catch (SQLException e) {
-            logger.severe("Failed to load balance for playerId=" + profile.getId()
-                    + ", currency=" + currency + ": " + e.getMessage());
-            e.printStackTrace();
-            return BigDecimal.ZERO;
-        } catch (NumberFormatException e) {
-            logger.severe("Invalid numeric balance format for playerId=" + profile.getId()
-                    + ", currency=" + currency + ": " + e.getMessage());
-            e.printStackTrace();
-            return BigDecimal.ZERO;
-        }
-    }
-
-    /**
-     * Sets the balance for a specific currency.
-     *
-     * @param profile  profile whose balance to update
-     * @param currency currency key
-     * @param amount   non-null value to store
-     */
-    public void setBalance(Profile profile, Currency currency, BigDecimal amount) {
-        if (!ensureValidId(profile, "setBalance(" + currency + ")")) {
-            return;
-        }
-        if (currency == null || amount == null) {
-            return;
-        }
-
-        try {
-            int updated = db.update(
-                    "players_balances",
-                    List.of("value"),
-                    List.of(amount),
-                    "player_id = ? AND `key` = ?",
-                    List.of(profile.getId(), currencyKey(currency))
-            );
-
-            if (updated == 0) {
-                db.insert(
-                        "players_balances",
-                        List.of("player_id", "key", "value"),
-                        List.of(profile.getId(), currencyKey(currency), amount)
-                );
-            }
-        } catch (SQLException e) {
-            logger.severe("Failed to set balance for playerId=" + profile.getId()
-                    + ", currency=" + currency + ": " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    /**
-     * Adds a delta to the balance for a specific currency.
-     *
-     * @param profile  profile whose balance to update
-     * @param currency currency key
-     * @param delta    non-zero delta (may be negative)
-     */
-    public void addBalance(Profile profile, Currency currency, BigDecimal delta) {
-        if (!ensureValidId(profile, "addBalance(" + currency + ")")) {
-            return;
-        }
-        if (currency == null || delta == null || delta.compareTo(BigDecimal.ZERO) == 0) {
-            return;
-        }
-
-        try {
-            db.incrementOrInsert(
-                    "players_balances",
-                    List.of("player_id", "key"),
-                    List.of(profile.getId(), currencyKey(currency)),
-                    "value",
-                    delta
-            );
-        } catch (SQLException e) {
-            logger.severe("Failed to add balance delta for playerId=" + profile.getId()
-                    + ", currency=" + currency + ", delta=" + delta + ": " + e.getMessage());
-            e.printStackTrace();
         }
     }
 
@@ -502,102 +325,82 @@ public final class ProfileStorage {
     // ======================================================================
 
     /**
-     * Loads the reply target player id from {@code players.reply}.
+     * Loads the last player this profile can answer with {@code /reply}.
      *
-     * @param profile profile whose reply target to load
-     * @return player id (players.id) or {@code null} if not set
+     * @param profile profile whose reply target should be loaded
+     * @return target {@code players.id}, or {@code null} when no conversation exists
      */
     public Integer getReplyTargetId(Profile profile) {
-        if (!ensureValidId(profile, "getReplyTargetId")) {
-            return null;
-        }
+        if (!ensureValidId(profile, "getReplyTargetId")) return null;
+
         try {
-            return db.getInt(
-                    "players",
-                    "reply",
-                    "id = ?",
-                    List.of(profile.getId())
-            );
-        } catch (SQLException e) {
-            logger.severe("Failed to load reply target for playerId=" + profile.getId()
-                    + ": " + e.getMessage());
-            e.printStackTrace();
+            return db.getInt(PLAYER_PROFILE_DATA_TABLE, "reply_target_player_id",
+                    "player_id = ?", List.of(profile.getId()));
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to load reply target for playerId="
+                    + profile.getId() + ": " + exception.getMessage(), exception);
             return null;
         }
     }
 
     /**
-     * Updates {@code players.reply} for the given profile.
+     * Stores the last player this profile can answer with {@code /reply}.
      *
-     * @param profile  profile to update
-     * @param targetId new reply target id, may be {@code null} to clear
+     * @param profile profile whose reply target should be changed
+     * @param targetId target {@code players.id}, or {@code null} to clear it
+     * @return {@code true} when the player row was updated
      */
-    public void setReplyTargetId(Profile profile, Integer targetId) {
-        if (!ensureValidId(profile, "setReplyTargetId")) {
-            return;
-        }
+    public boolean setReplyTargetId(Profile profile, Integer targetId) {
+        if (!ensureValidId(profile, "setReplyTargetId")) return false;
+        if (!ensurePlayerProfileDataRow(profile.getId())) return false;
+
         try {
-            db.update(
-                    "players",
-                    List.of("reply"),
-                    List.of(targetId),
-                    "id = ?",
-                    List.of(profile.getId())
-            );
-        } catch (SQLException e) {
-            logger.severe("Failed to update reply target for playerId=" + profile.getId()
-                    + ": " + e.getMessage());
-            e.printStackTrace();
+            return db.update(PLAYER_PROFILE_DATA_TABLE, List.of("reply_target_player_id"),
+                    Collections.singletonList(targetId), "player_id = ?", profile.getId()) == 1;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to update reply target for playerId="
+                    + profile.getId() + ": " + exception.getMessage(), exception);
+            return false;
         }
     }
 
     /**
-     * Loads the welcome message from {@code players.welcome}.
+     * Loads the message displayed immediately before the player's join line.
      *
      * @param profile profile whose welcome message to load
      * @return welcome message, or {@code null} if none is set
      */
     public String getWelcome(Profile profile) {
-        if (!ensureValidId(profile, "getWelcome")) {
-            return null;
-        }
+        if (!ensureValidId(profile, "getWelcome")) return null;
+
         try {
-            return db.getString(
-                    "players",
-                    "welcome",
-                    "id = ?",
-                    List.of(profile.getId())
-            );
-        } catch (SQLException e) {
-            logger.severe("Failed to load welcome message for playerId=" + profile.getId()
-                    + ": " + e.getMessage());
-            e.printStackTrace();
+            return db.getString(PLAYER_PROFILE_DATA_TABLE, "welcome_message",
+                    "player_id = ?", profile.getId());
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to load welcome message for playerId="
+                    + profile.getId() + ": " + exception.getMessage(), exception);
             return null;
         }
     }
 
     /**
-     * Updates the welcome message in {@code players.welcome}.
+     * Stores the message displayed immediately before the player's join line.
      *
      * @param profile profile to update
      * @param welcome new message, or {@code null} to clear
+     * @return {@code true} when the player row was updated
      */
-    public void setWelcome(Profile profile, String welcome) {
-        if (!ensureValidId(profile, "setWelcome")) {
-            return;
-        }
+    public boolean setWelcome(Profile profile, String welcome) {
+        if (!ensureValidId(profile, "setWelcome")) return false;
+        if (!ensurePlayerProfileDataRow(profile.getId())) return false;
+
         try {
-            db.update(
-                    "players",
-                    List.of("welcome"),
-                    List.of(welcome),
-                    "id = ?",
-                    List.of(profile.getId())
-            );
-        } catch (SQLException e) {
-            logger.severe("Failed to update welcome message for playerId=" + profile.getId()
-                    + ": " + e.getMessage());
-            e.printStackTrace();
+            return db.update(PLAYER_PROFILE_DATA_TABLE, List.of("welcome_message"),
+                    Collections.singletonList(welcome), "player_id = ?", profile.getId()) == 1;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to update welcome message for playerId="
+                    + profile.getId() + ": " + exception.getMessage(), exception);
+            return false;
         }
     }
 
@@ -739,86 +542,249 @@ public final class ProfileStorage {
     // ----- Friends -----
 
     /**
-     * Adds an entry to {@code players_friend_list}.
+     * Returns the relationship state between a profile and another player.
+     *
+     * <p>The two ids are sorted before querying because one unordered player
+     * pair owns exactly one row in {@code player_friendships}. Request direction
+     * remains available through {@code requester_player_id}.</p>
+     *
+     * @param profile player from whose perspective the state is requested
+     * @param otherPlayerId other {@code players.id}
+     * @return current state relative to {@code profile}
      */
-    public void addFriend(Profile profile, int friendId) {
-        if (!ensureValidId(profile, "addFriend")) {
-            return;
+    public FriendshipStatus getFriendshipStatus(Profile profile, int otherPlayerId) {
+        if (!ensureValidRelation(profile, otherPlayerId, "getFriendshipStatus")) {
+            return FriendshipStatus.NONE;
         }
+
+        int firstPlayerId = Math.min(profile.getId(), otherPlayerId);
+        int secondPlayerId = Math.max(profile.getId(), otherPlayerId);
+
         try {
-            insertPair("players_friend_list", profile.getId(), friendId);
-        } catch (SQLException e) {
-            logger.severe("Failed to add friend: playerId=" + profile.getId()
-                    + ", friendId=" + friendId + ": " + e.getMessage());
-            e.printStackTrace();
+            Map<String, Object> row = db.getRow(
+                    PLAYER_FRIENDSHIP_TABLE,
+                    List.of("requester_player_id", "accepted_at"),
+                    "first_player_id = ? AND second_player_id = ?",
+                    List.of(firstPlayerId, secondPlayerId)
+            );
+
+            if (row.isEmpty()) return FriendshipStatus.NONE;
+            if (row.get("accepted_at") != null) return FriendshipStatus.ACCEPTED;
+
+            int requesterPlayerId = ((Number) row.get("requester_player_id")).intValue();
+            return requesterPlayerId == profile.getId()
+                    ? FriendshipStatus.OUTGOING_REQUEST
+                    : FriendshipStatus.INCOMING_REQUEST;
+        } catch (SQLException | ClassCastException exception) {
+            logger.log(Level.SEVERE, "Failed to load friendship between playerId="
+                    + profile.getId() + " and playerId=" + otherPlayerId + ": "
+                    + exception.getMessage(), exception);
+            return FriendshipStatus.UNAVAILABLE;
         }
     }
 
     /**
-     * Removes an entry from {@code players_friend_list}.
+     * Creates a pending friend request when no row exists for the pair.
+     *
+     * @param requester profile sending the request
+     * @param targetPlayerId player receiving the request
+     * @return {@code true} when a new request row was inserted
      */
-    public void removeFriend(Profile profile, int friendId) {
-        if (!ensureValidId(profile, "removeFriend")) {
-            return;
-        }
-        try {
-            deletePair("players_friend_list", profile.getId(), friendId);
-        } catch (SQLException e) {
-            logger.severe("Failed to remove friend: playerId=" + profile.getId()
-                    + ", friendId=" + friendId + ": " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
+    public boolean createFriendRequest(Profile requester, int targetPlayerId) {
+        if (!ensureValidRelation(requester, targetPlayerId, "createFriendRequest")) return false;
 
-    /**
-     * Checks whether {@code playerId} has {@code targetId} on their friend list.
-     */
-    public boolean isFriend(int playerId, int targetId) {
+        int firstPlayerId = Math.min(requester.getId(), targetPlayerId);
+        int secondPlayerId = Math.max(requester.getId(), targetPlayerId);
+
         try {
-            return hasPair("players_friend_list", playerId, targetId);
-        } catch (SQLException e) {
-            logger.severe("Failed to check friend relation: " + playerId + " -> "
-                    + targetId + ": " + e.getMessage());
-            e.printStackTrace();
+            return db.insert(
+                    PLAYER_FRIENDSHIP_TABLE,
+                    List.of("first_player_id", "second_player_id", "requester_player_id"),
+                    List.of(firstPlayerId, secondPlayerId, requester.getId())
+            ) == 1;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to create friend request: playerId="
+                    + requester.getId() + ", targetPlayerId=" + targetPlayerId + ": "
+                    + exception.getMessage(), exception);
             return false;
         }
     }
 
     /**
-     * Returns all friend ids ({@code players.id}) for the given profile.
+     * Accepts a request only when it was sent by the supplied requester.
+     *
+     * @param receiver profile accepting the request
+     * @param requesterPlayerId player who originally sent the request
+     * @return {@code true} when a pending request became an accepted friendship
+     */
+    public boolean acceptFriendRequest(Profile receiver, int requesterPlayerId) {
+        if (!ensureValidRelation(receiver, requesterPlayerId, "acceptFriendRequest")) return false;
+
+        int firstPlayerId = Math.min(receiver.getId(), requesterPlayerId);
+        int secondPlayerId = Math.max(receiver.getId(), requesterPlayerId);
+
+        try {
+            return db.update(
+                    PLAYER_FRIENDSHIP_TABLE,
+                    List.of("accepted_at"),
+                    List.of(LocalDateTime.now()),
+                    "first_player_id = ? AND second_player_id = ? "
+                            + "AND requester_player_id = ? AND accepted_at IS NULL",
+                    firstPlayerId, secondPlayerId, requesterPlayerId
+            ) == 1;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to accept friend request: playerId="
+                    + receiver.getId() + ", requesterPlayerId=" + requesterPlayerId + ": "
+                    + exception.getMessage(), exception);
+            return false;
+        }
+    }
+
+    /**
+     * Deletes the one row shared by two players.
+     *
+     * <p>The same operation supports declining a request, cancelling a sent
+     * request and removing an accepted friend. Command code decides which of
+     * those actions is currently valid by checking the friendship state first.</p>
+     *
+     * @param profile one participant
+     * @param otherPlayerId the other participant
+     * @return {@code true} when a row was deleted
+     */
+    public boolean deleteFriendship(Profile profile, int otherPlayerId) {
+        if (!ensureValidRelation(profile, otherPlayerId, "deleteFriendship")) return false;
+
+        int firstPlayerId = Math.min(profile.getId(), otherPlayerId);
+        int secondPlayerId = Math.max(profile.getId(), otherPlayerId);
+
+        try {
+            return db.delete(
+                    PLAYER_FRIENDSHIP_TABLE,
+                    "first_player_id = ? AND second_player_id = ?",
+                    firstPlayerId, secondPlayerId
+            ) == 1;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to delete friendship between playerId="
+                    + profile.getId() + " and playerId=" + otherPlayerId + ": "
+                    + exception.getMessage(), exception);
+            return false;
+        }
+    }
+
+    /**
+     * Returns accepted friends only; pending requests are deliberately excluded.
+     *
+     * @param profile profile whose accepted friends should be loaded
+     * @return database ids of accepted friends
      */
     public List<Integer> getFriendIds(Profile profile) {
-        if (!ensureValidId(profile, "getFriendIds")) {
+        if (!ensureValidId(profile, "getFriendIds")) return Collections.emptyList();
+
+        try {
+            List<Integer> friendIds = new ArrayList<>();
+            friendIds.addAll(db.getIntList(
+                    PLAYER_FRIENDSHIP_TABLE,
+                    "second_player_id",
+                    "first_player_id = ? AND accepted_at IS NOT NULL",
+                    List.of(profile.getId()),
+                    0
+            ));
+            friendIds.addAll(db.getIntList(
+                    PLAYER_FRIENDSHIP_TABLE,
+                    "first_player_id",
+                    "second_player_id = ? AND accepted_at IS NOT NULL",
+                    List.of(profile.getId()),
+                    0
+            ));
+            return friendIds;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to load friends for playerId="
+                    + profile.getId() + ": " + exception.getMessage(), exception);
             return Collections.emptyList();
         }
-        return fetchTargetIdList("players_friend_list", profile.getId());
+    }
+
+    /**
+     * Returns pending requests sent to the supplied profile.
+     *
+     * @param profile request recipient
+     * @return database IDs of players waiting for this profile's answer
+     */
+    public List<Integer> getIncomingFriendRequestIds(Profile profile) {
+        return getPendingFriendRequestIds(profile, false);
+    }
+
+    /**
+     * Returns pending requests sent by the supplied profile.
+     *
+     * @param profile request sender
+     * @return database IDs of players who have not answered yet
+     */
+    public List<Integer> getOutgoingFriendRequestIds(Profile profile) {
+        return getPendingFriendRequestIds(profile, true);
+    }
+
+    /** Loads pending request counterparts from both sides of the canonical pair. */
+    private List<Integer> getPendingFriendRequestIds(Profile profile, boolean sentByProfile) {
+        if (!ensureValidId(profile, "getPendingFriendRequestIds")) return Collections.emptyList();
+
+        String requesterCondition = sentByProfile
+                ? "requester_player_id = ?"
+                : "requester_player_id <> ?";
+
+        try {
+            List<Integer> playerIds = new ArrayList<>();
+            playerIds.addAll(db.getIntList(PLAYER_FRIENDSHIP_TABLE, "second_player_id",
+                    "first_player_id = ? AND " + requesterCondition + " AND accepted_at IS NULL",
+                    List.of(profile.getId(), profile.getId()), 0));
+            playerIds.addAll(db.getIntList(PLAYER_FRIENDSHIP_TABLE, "first_player_id",
+                    "second_player_id = ? AND " + requesterCondition + " AND accepted_at IS NULL",
+                    List.of(profile.getId(), profile.getId()), 0));
+            return playerIds;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to load pending friend requests for playerId="
+                    + profile.getId() + ".", exception);
+            return Collections.emptyList();
+        }
+    }
+
+    /** Validates both ids before a relationship operation reaches SQL. */
+    private boolean ensureValidRelation(Profile profile, int otherPlayerId, String context) {
+        if (!ensureValidId(profile, context)) return false;
+        if (otherPlayerId > 0 && otherPlayerId != profile.getId()) return true;
+
+        logger.warning("ProfileStorage: attempted " + context + " with invalid target player id: "
+                + otherPlayerId);
+        return false;
     }
 
     // ----- Trust -----
 
-    public void addTrusted(Profile profile, int targetId) {
-        if (!ensureValidId(profile, "addTrusted")) {
-            return;
-        }
+    public boolean addTrusted(Profile profile, int targetId) {
+        if (!ensureValidRelation(profile, targetId, "addTrusted")) return false;
+
         try {
-            insertPair("players_trust_list", profile.getId(), targetId);
-        } catch (SQLException e) {
-            logger.severe("Failed to add trusted: playerId=" + profile.getId()
-                    + ", targetId=" + targetId + ": " + e.getMessage());
-            e.printStackTrace();
+            return db.insert(PLAYER_TRUST_TABLE,
+                    List.of("trusting_player_id", "trusted_player_id"),
+                    List.of(profile.getId(), targetId)) == 1;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to add trust: playerId=" + profile.getId()
+                    + ", targetId=" + targetId + ".", exception);
+            return false;
         }
     }
 
-    public void removeTrusted(Profile profile, int targetId) {
-        if (!ensureValidId(profile, "removeTrusted")) {
-            return;
-        }
+    public boolean removeTrusted(Profile profile, int targetId) {
+        if (!ensureValidRelation(profile, targetId, "removeTrusted")) return false;
+
         try {
-            deletePair("players_trust_list", profile.getId(), targetId);
-        } catch (SQLException e) {
-            logger.severe("Failed to remove trusted: playerId=" + profile.getId()
-                    + ", targetId=" + targetId + ": " + e.getMessage());
-            e.printStackTrace();
+            return db.delete(PLAYER_TRUST_TABLE,
+                    "trusting_player_id = ? AND trusted_player_id = ?",
+                    profile.getId(), targetId) == 1;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to remove trust: playerId=" + profile.getId()
+                    + ", targetId=" + targetId + ".", exception);
+            return false;
         }
     }
 
@@ -827,11 +793,12 @@ public final class ProfileStorage {
      */
     public boolean isTrusted(int playerId, int targetId) {
         try {
-            return hasPair("players_trust_list", playerId, targetId);
-        } catch (SQLException e) {
+            return db.count(PLAYER_TRUST_TABLE,
+                    "trusting_player_id = ? AND trusted_player_id = ?",
+                    List.of(playerId, targetId)) > 0;
+        } catch (SQLException exception) {
             logger.severe("Failed to check trust relation: " + playerId + " -> "
-                    + targetId + ": " + e.getMessage());
-            e.printStackTrace();
+                    + targetId + ": " + exception.getMessage());
             return false;
         }
     }
@@ -843,7 +810,14 @@ public final class ProfileStorage {
         if (!ensureValidId(profile, "getTrustedIds")) {
             return Collections.emptyList();
         }
-        return fetchTargetIdList("players_trust_list", profile.getId());
+        try {
+            return db.getIntList(PLAYER_TRUST_TABLE, "trusted_player_id",
+                    "trusting_player_id = ?", List.of(profile.getId()), 0);
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to load trust list for playerId="
+                    + profile.getId() + ".", exception);
+            return Collections.emptyList();
+        }
     }
 
     // ----- Ignore -----
@@ -1192,25 +1166,61 @@ public final class ProfileStorage {
     }
 
     /**
-     * Loads the stored nick from {@code players.nick}.
+     * Resolves the permanent player ID belonging to a current Minecraft name.
      *
-     * @param id database primary key (players.id)
-     * @return nick string, or {@code null} if none is set
+     * <p>The {@code players.name} collation performs the intended
+     * case-insensitive comparison.</p>
+     *
+     * @param username current Minecraft username
+     * @return matching {@code players.id}, or {@code null} when unknown
      */
-    public String getNick(int id) {
-        if (id <= 0) {
+    public Integer findIdByIgn(String username) {
+        if (username == null || username.isBlank()) return null;
+
+        try {
+            return db.getInt("players", "id", "name = ?", List.of(username));
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to resolve player by username '"
+                    + username + "'.", exception);
             return null;
         }
+    }
+
+    /**
+     * Resolves the permanent player ID belonging to a plain nickname.
+     *
+     * @param plainNickname nickname without color codes
+     * @return matching {@code players.id}, or {@code null} when unknown
+     */
+    public Integer findIdByNickname(String plainNickname) {
+        if (plainNickname == null || plainNickname.isBlank()) return null;
+
         try {
-            return db.getString(
-                    "players",
-                    "nick",
-                    "id = ?",
-                    List.of(id)
-            );
-        } catch (SQLException e) {
-            logger.severe("Failed to load nick for id=" + id + ": " + e.getMessage());
-            e.printStackTrace();
+            return db.getInt(PLAYER_PROFILE_DATA_TABLE, "player_id",
+                    "nickname_plain = ?", List.of(plainNickname));
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to resolve player by nickname '"
+                    + plainNickname + "'.", exception);
+            return null;
+        }
+    }
+
+    /**
+     * Loads the stored, color-formatted nickname from
+     * {@code player_profile_data.nickname_formatted}.
+     *
+     * @param id database primary key ({@code players.id})
+     * @return raw formatted nickname, or {@code null} if none is set
+     */
+    public String getNick(int id) {
+        if (id <= 0) return null;
+
+        try {
+            return db.getString(PLAYER_PROFILE_DATA_TABLE, "nickname_formatted",
+                    "player_id = ?", id);
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to load nickname for playerId=" + id
+                    + ": " + exception.getMessage(), exception);
             return null;
         }
     }
@@ -1243,41 +1253,30 @@ public final class ProfileStorage {
     }
 
     /**
-     * Updates the stored nickname for a player.
+     * Stores both representations of a nickname in one update.
+     *
+     * <p>The formatted value is used for display. The plain lowercase value is
+     * used for indexed lookup and case-insensitive uniqueness.</p>
      *
      * @param profile profile whose nickname should be changed
-     * @param nick new nickname, or {@code null} to clear it
+     * @param formattedNickname raw nickname including allowed color codes, or
+     *                          {@code null} to clear it
+     * @param plainNickname lowercase visible nickname, or {@code null} to clear it
+     * @return {@code true} when the profile-data row was updated
      */
-    public void setNick(Profile profile, String nick) {
-        if (!ensureValidId(profile, "setNick")) {
-            return;
-        }
+    public boolean setNick(Profile profile, String formattedNickname, String plainNickname) {
+        if (!ensureValidId(profile, "setNick")) return false;
+        if (!ensurePlayerProfileDataRow(profile.getId())) return false;
 
         try {
-            db.update(
-                    "players",
-                    List.of("nick"),
-
-                    /*
-                     * Collections.singletonList() is intentional.
-                     *
-                     * List.of(null) throws NullPointerException, while nick may
-                     * legitimately be null when clearing the nickname.
-                     */
-                    Collections.singletonList(nick),
-
-                    "id = ?",
-                    List.of(profile.getId())
-            );
-        } catch (SQLException e) {
-            logger.severe(
-                    "Failed to update nick for playerId="
-                    + profile.getId()
-                    + ": "
-                    + e.getMessage()
-            );
-
-            e.printStackTrace();
+            return db.update(PLAYER_PROFILE_DATA_TABLE,
+                    List.of("nickname_formatted", "nickname_plain"),
+                    java.util.Arrays.asList(formattedNickname, plainNickname),
+                    "player_id = ?", profile.getId()) == 1;
+        } catch (SQLException exception) {
+            logger.log(Level.SEVERE, "Failed to update nickname for playerId="
+                    + profile.getId() + ": " + exception.getMessage(), exception);
+            return false;
         }
     }
     

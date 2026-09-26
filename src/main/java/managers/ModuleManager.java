@@ -60,14 +60,14 @@ public class ModuleManager {
     /**
      * Full lifecycle bootstrap, called once from Main.onEnable():
      * <ol>
-     *     <li>Call {@code load()} on every registered module
-     *         (config, lang, listeners, etc. are handled by BaseModule).</li>
+     *     <li>Call {@code load()} on every registered module so BaseModule can
+     *         prepare its configuration and metadata.</li>
      *     <li>Sort modules based on {@code requiredModules} and {@code preloadBefore}.</li>
      *     <li>Enable modules in that order, but only if their config says enabled.</li>
      * </ol>
      */
     public void bootstrapModules() {
-        // 1) Load all modules (config + lang + listeners)
+        // 1) Load every module's configuration and metadata.
         for (BaseModule module : modules.values()) {
             try {
                 module.load();
@@ -213,6 +213,26 @@ public class ModuleManager {
      */
     public BaseModule getModule(String moduleName) {
         return modules.get(moduleName);
+    }
+
+    /**
+     * Finds a registered module by its concrete Java type.
+     *
+     * <p>Central listeners use this form because it is checked by the compiler
+     * and does not require repeating module-name strings or unsafe casts.</p>
+     *
+     * @param moduleType expected module class
+     * @param <T> concrete module type
+     * @return matching module, or {@code null} when it is not registered
+     */
+    public <T extends BaseModule> T getModule(Class<T> moduleType) {
+        if (moduleType == null) return null;
+
+        for (BaseModule module : modules.values()) {
+            if (moduleType.isInstance(module)) return moduleType.cast(module);
+        }
+
+        return null;
     }
 
     /**

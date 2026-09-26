@@ -14,6 +14,7 @@ import org.bukkit.entity.Player;
 import enums.GroupType;
 import enums.Perm;
 import model.Group;
+import utils.Validator;
 
 /**
  * Central manager responsible for creating, resolving and destroying
@@ -144,6 +145,20 @@ public final class ProfileManager {
          */
         if (playerId <= 0) {
             return null;
+        }
+
+        /*
+         * Storage gives a real Minecraft username priority over nicknames.
+         * Mirror that collision cleanup in RAM when the previous nickname
+         * owner happens to be online.
+         */
+        String claimedUsername = player.getName();
+        for (Profile onlineProfile : online.values()) {
+            if (onlineProfile.getId() == playerId || onlineProfile.getNick() == null) continue;
+            if (claimedUsername.equalsIgnoreCase(
+                    Validator.normalizeNicknameForLookup(onlineProfile.getNick()))) {
+                onlineProfile.clearCachedNickname();
+            }
         }
 
         /*
@@ -368,6 +383,66 @@ public final class ProfileManager {
         }
 
         return loadOfflineById(id);
+    }
+
+    /**
+     * Resolves a player by their current or last-known Minecraft username.
+     * Online profiles are returned from RAM; offline profiles are temporary.
+     *
+     * @param username Minecraft account name
+     * @return matching profile, or {@code null} when unknown
+     */
+    public Profile resolveByUsername(String username) {
+        if (username == null || username.isBlank()) return null;
+
+        for (Profile profile : online.values()) {
+            if (username.equalsIgnoreCase(profile.getIgn())) return profile;
+        }
+
+        Integer playerId = storage.findIdByIgn(username);
+        return playerId == null ? null : loadOfflineById(playerId);
+    }
+
+    /**
+     * Resolves a player by a nickname after colors have been removed.
+     *
+     * @param nickname formatted or plain nickname
+     * @return nickname owner, or {@code null} when unused
+     */
+    public Profile resolveByNickname(String nickname) {
+        String plainNickname = Validator.normalizeNicknameForLookup(nickname);
+        if (plainNickname == null || plainNickname.isBlank()) return null;
+
+        Integer playerId = storage.findIdByNickname(plainNickname);
+        return playerId == null ? null : resolveById(playerId);
+    }
+
+    /**
+     * Resolves a command target by username first and nickname second.
+     * Real Minecraft names therefore always win an ambiguous lookup.
+     *
+     * @param input username or visible nickname
+     * @return matching profile, or {@code null} when neither lookup succeeds
+     */
+    public Profile resolveByUsernameOrNickname(String input) {
+        Profile usernameMatch = resolveByUsername(input);
+        return usernameMatch != null ? usernameMatch : resolveByNickname(input);
+    }
+
+    /**
+     * Returns an online profile by username without touching the database.
+     *
+     * @param username current Minecraft username
+     * @return live profile, or {@code null} when that player is offline
+     */
+    public Profile resolveOnlineByUsername(String username) {
+        if (username == null || username.isBlank()) return null;
+
+        for (Profile profile : online.values()) {
+            if (username.equalsIgnoreCase(profile.getIgn())) return profile;
+        }
+
+        return null;
     }
 
     /**

@@ -17,12 +17,38 @@ soft-depend: [PinataParty]
 # COMMANDS
 commands:
   
+  # Base
+  
+  
+  # Social
+  friend:
+  unfriend:
+  trust:
+  untrust:
+  
+  # Moderation
+  ban:
+  unban:
+  mute:
+  unmute:
+  jail:
+  free:
+  kick:
+  kickall:
+  punish:
+  warn:
+  prius:
+  welcome:
+  nick:
+
   # Locations
   spawn:
   setspawn:
   home:
   sethome:
   warp:
+  swarp:
+  pwarp:
   rtp:
   wild:
   hub:
@@ -32,3 +58,4 @@ commands:
   wallet:
   pay:
   transfer:
+  points:

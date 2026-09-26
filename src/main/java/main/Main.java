@@ -5,9 +5,6 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.config.Configurator;
 import command.CommandCentral;
@@ -19,6 +16,7 @@ import managers.ModuleManager;
 import managers.YamlLanguageManager;
 import modules.EconomyModule;
 import modules.LocationsModule;
+import modules.PlayersModule;
 import playerdata.Profile;
 import playerdata.ProfileManager;
 import playerdata.ProfileStorage;
@@ -47,16 +45,16 @@ public class Main extends JavaPlugin
 
 	/** Handles enabling, disabling and monitoring of plugin modules. */
 	private ModuleManager moduleManager;
-	
+
 	private LanguageManager languageManager;
-	
+
 	private ConfigManager configMain;
-	
+
 	private DatabaseAccess databaseAccess;
 
 	/** Storage helper for all profile-related persistence. */
     private ProfileStorage profileStorage;
-    
+
     @Override
     public void onLoad() {
         muteHikariLoggers();
@@ -70,7 +68,7 @@ public class Main extends JavaPlugin
 	 */
 	@Override
 	public void onEnable() {
-		
+
 		instance = this;
 
 		// Config
@@ -81,34 +79,27 @@ public class Main extends JavaPlugin
         if (!database.initializeAndStartWatchdog()) {
             return; // database already logged and disabled the plugin
         }
-        
+
         databaseAccess = new DatabaseAccess(database);
 
         profileStorage = new ProfileStorage(databaseAccess, getLogger());
         profileManager = new ProfileManager(profileStorage);
-        
-        Path languageFile = getDataFolder()
-                .toPath()
-                .resolve("lang.yml");
-
-        if (!Files.exists(languageFile)) {
-            saveResource("lang.yml", false);
-        }
 
         languageManager = new YamlLanguageManager(this);
 
 		commandCentral = new CommandCentral(this, database, languageManager);
-		
+
 		moduleManager = new ModuleManager(database);
 
         // Register modules here
+		moduleManager.registerModule(new PlayersModule());
 		moduleManager.registerModule(new LocationsModule());
 		moduleManager.registerModule(new EconomyModule());
 
         // Load + enable in dependency order
 		registerModules();
 		moduleManager.bootstrapModules();
-		
+
 		getServer().getPluginManager().registerEvents(
 		        new listeners.player.PlayerJoin(),
 		        this
@@ -118,9 +109,19 @@ public class Main extends JavaPlugin
 		        new listeners.player.PlayerQuit(),
 		        this
 		);
-		
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.entity.EntityDeath(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.player.PlayerRespawn(),
+		        this
+		);
+
 	}
-	
+
 	/**
 	 * Called when the plugin is disabled.
 	 * <p>
@@ -143,9 +144,9 @@ public class Main extends JavaPlugin
 		}
 
 		getLogger().info("Plugin disabled.");
-		
+
 	}
-	
+
 	/**
 	 * Command routing entry point.
 	 * <p>
@@ -196,14 +197,14 @@ public class Main extends JavaPlugin
 	public LanguageManager getLanguageManager() {
         return languageManager;
     }
-	
+
 	/**
 	 * @return the database handler
 	 */
 	public Database getDatabase() {
 		return database;
 	}
-	
+
 	public DatabaseAccess db() {
 	    return databaseAccess;
 	}
@@ -272,9 +273,9 @@ public class Main extends JavaPlugin
             );
         }
     }
-    
+
 	public DatabaseAccess getDatabaseAccess() {
 		return databaseAccess;
 	}
-	
+
 }

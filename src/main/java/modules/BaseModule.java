@@ -11,17 +11,13 @@ import org.bukkit.World;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
-import org.bukkit.event.Listener;
-import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.java.JavaPlugin;
 import playerdata.Profile;
 import playerdata.ProfileManager;
 
-import java.net.URL;
 import java.util.*;
 import java.util.function.Consumer;
-import java.util.jar.JarEntry;
-import java.util.jar.JarFile;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -30,10 +26,9 @@ import java.util.logging.Logger;
  * Handles:
  * - module config + language loading
  * - auto registration/unregistration of commands
- * - dynamic listener registration from modules.<name>.listeners
  * - convenience accessors for DB, profiles, server, logging, etc.
  */
-public abstract class BaseModule implements Listener {
+public abstract class BaseModule {
 
     /**
      * Runtime lifecycle state of a module.
@@ -202,9 +197,6 @@ public abstract class BaseModule implements Listener {
         for (CommandRegistry cmd : registeredCommands) {
             central.register(cmd);
         }
-
-        // Register listeners from modules.<modulename>.listeners.*
-        registerListenersDynamically();
 
         try {
             onEnable();
@@ -436,96 +428,6 @@ public abstract class BaseModule implements Listener {
     }
 
     // =====================================================================
-    // LISTENER REGISTRATION
-    // =====================================================================
-
-    /**
-     * Scans the JAR for classes under modules.<moduleName>.listeners and registers all
-     * that implement {@link Listener}.
-     *
-     * Supported constructors in listener classes:
-     * - (BaseModule)
-     * - (Main)
-     * - no-arg
-     */
-    private void registerListenersDynamically() {
-        String pkg = "modules." + moduleName.toLowerCase(Locale.ROOT) + ".listeners";
-        String path = pkg.replace('.', '/');
-
-        try {
-            ClassLoader cl = plugin.getClass().getClassLoader();
-            Enumeration<URL> resources = cl.getResources(path);
-            if (!resources.hasMoreElements()) {
-                return; // no listeners package
-            }
-
-            PluginManager pm = plugin.getServer().getPluginManager();
-            Set<String> classNames = new HashSet<>();
-
-            while (resources.hasMoreElements()) {
-                URL url = resources.nextElement();
-                String urlStr = url.toString();
-
-                if (urlStr.startsWith("jar:file:")) {
-                    String jarPath = urlStr.substring("jar:file:".length(), urlStr.indexOf("!"));
-                    try (JarFile jar = new JarFile(jarPath)) {
-                        Enumeration<JarEntry> entries = jar.entries();
-                        while (entries.hasMoreElements()) {
-                            JarEntry entry = entries.nextElement();
-                            String name = entry.getName();
-                            if (name.startsWith(path) && name.endsWith(".class") && !entry.isDirectory()) {
-                                String className = name.replace('/', '.').substring(0, name.length() - 6);
-                                classNames.add(className);
-                            }
-                        }
-                    }
-                }
-            }
-
-            for (String className : classNames) {
-                try {
-                    Class<?> clazz = Class.forName(className, true, plugin.getClass().getClassLoader());
-                    if (!Listener.class.isAssignableFrom(clazz)) {
-                        continue;
-                    }
-
-                    Listener listener = instantiateListener(clazz);
-                    if (listener != null) {
-                        pm.registerEvents(listener, plugin);
-                        log("Registered listener: " + className);
-                    }
-                } catch (ClassNotFoundException ignored) {
-                    // Skip invalid classes
-                }
-            }
-
-        } catch (Exception e) {
-            log("Failed to scan/register listeners for package: " + path + " (" + e.getMessage() + ")");
-        }
-    }
-
-    private Listener instantiateListener(Class<?> clazz) {
-        try {
-            // Try (BaseModule)
-            try {
-                return (Listener) clazz.getConstructor(BaseModule.class).newInstance(this);
-            } catch (NoSuchMethodException ignored) {}
-
-            // Try (Main)
-            try {
-                return (Listener) clazz.getConstructor(Main.class).newInstance(plugin);
-            } catch (NoSuchMethodException ignored) {}
-
-            // Try no-arg
-            return (Listener) clazz.getConstructor().newInstance();
-
-        } catch (Exception e) {
-            log("Failed to instantiate listener " + clazz.getName() + ": " + e.getMessage());
-            return null;
-        }
-    }
-
-    // =====================================================================
     // CONVENIENCE GETTERS (what you asked for)
     // =====================================================================
 
@@ -540,7 +442,7 @@ public abstract class BaseModule implements Listener {
 
     // --- Profile / player access ---
 
-    private ProfileManager profiles() {
+    protected final ProfileManager profiles() {
         return plugin.getProfileManager();
     }
 
@@ -593,26 +495,13 @@ public abstract class BaseModule implements Listener {
     }
 
     /**
-     * Name-based offline lookup. Uses Bukkit offline player cache + ProfileManager.
+     * Resolves a current or last-known Minecraft username directly through the
+     * plugin database. This works for offline players and never asks Bukkit to
+     * invent an offline UUID for an unknown name.
      */
     public Profile getOfflinePlayer(String ign) {
         if (ign == null || ign.isEmpty()) return null;
-        // Prefer online
-        Profile online = getPlayer(ign);
-        if (online != null) return online;
-
-        // Fallback: offline by name via Bukkit -> UUID -> ProfileManager
-        java.util.UUID uuid = null;
-        try {
-            // 1.20+ has getOfflinePlayerIfCached; fall back to legacy if needed
-            org.bukkit.OfflinePlayer off = plugin.getServer().getOfflinePlayer(ign);
-            if (off != null && off.hasPlayedBefore()) {
-                uuid = off.getUniqueId();
-            }
-        } catch (Throwable ignored) {}
-
-        if (uuid == null) return null;
-        return profiles().resolveByUuid(uuid);
+        return profiles().resolveByUsername(ign);
     }
 
     // --- Config / language ---
@@ -743,8 +632,25 @@ public abstract class BaseModule implements Listener {
         configManager.saveConfig();
     }
 
+    /** Writes an informational module message with the module name attached. */
     public void log(String message) {
         getLogger().info("[" + moduleName + "] " + message);
+    }
+
+    /** Writes a warning with the same prefix used by every module. */
+    protected final void logWarning(String message) {
+        getLogger().warning("[" + moduleName + "] " + message);
+    }
+
+    /**
+     * Writes a module failure and its original exception through the plugin's
+     * central logger.
+     *
+     * @param message concise description of the failed operation
+     * @param exception original failure
+     */
+    protected final void logError(String message, Throwable exception) {
+        getLogger().log(Level.SEVERE, "[" + moduleName + "] " + message, exception);
     }
     
 
