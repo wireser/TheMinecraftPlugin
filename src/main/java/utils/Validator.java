@@ -13,9 +13,8 @@ import enums.NicknameFormattingLevel;
  */
 public final class Validator {
 
-    private static final int MAX_FORMATTED_NICKNAME_LENGTH = 255;
-    private static final int MAX_WELCOME_CODE_POINTS = 70;
-    private static final int MAX_WELCOME_LINES = 2;
+    private static final int DEFAULT_MAXIMUM_WELCOME_CODE_POINTS = 70;
+    private static final int DEFAULT_MAXIMUM_WELCOME_LINES = 2;
 
     private static final Pattern NUMERIC = Pattern.compile("[0-9]+");
     private static final Pattern ALPHABETIC = Pattern.compile("[A-Za-z]+");
@@ -34,10 +33,7 @@ public final class Validator {
     /* Minecraft account names contain 3-16 ASCII letters, numbers or underscores. */
     private static final Pattern MINECRAFT_USERNAME = Pattern.compile("[A-Za-z0-9_]{3,16}");
 
-    private static final Pattern NICKNAME_RGB_COLOR = Pattern.compile("(?i)&#[0-9a-f]{6}");
     private static final Pattern NICKNAME_COLOR_CODE = Pattern.compile("(?i)(?:&#[0-9a-f]{6}|&[0-9a-fr])");
-    private static final Pattern NICKNAME_VISIBLE_TEXT =
-            Pattern.compile("[A-Za-z0-9][A-Za-z0-9._]{1,18}[A-Za-z0-9]");
 
     private Validator() {
         throw new UnsupportedOperationException("Validator cannot be instantiated.");
@@ -130,30 +126,34 @@ public final class Validator {
     /**
      * Validates a formatted nickname.
      *
-     * <p>The visible nickname contains 3-20 ASCII letters, numbers, dots or
-     * underscores, begins and ends with a letter or number, and uses at most
-     * three dots/underscores in total. Color codes do not count toward the
-     * visible limit. The raw limit leaves enough room for RGB colors.</p>
+     * <p>The owning module supplies its current limits and patterns. This class
+     * applies those rules without deciding gameplay policy itself.</p>
      *
      * @param nickname formatted nickname to validate
      * @param formattingLevel color syntax available to the nickname owner
+     * @param maximumFormattedLength maximum raw length including color codes
+     * @param maximumSeparators maximum combined dots and underscores
+     * @param visibleTextPattern complete pattern for the nickname after colors are removed
+     * @param rgbColorPattern pattern matching one supported RGB color code
+     * @param colorCodePattern pattern matching every supported color code
      * @return {@code true} when both its formatting and visible name are valid
      */
-    public static boolean isValidNickname(String nickname, NicknameFormattingLevel formattingLevel) {
-        if (nickname == null || nickname.isBlank() || nickname.length() > MAX_FORMATTED_NICKNAME_LENGTH) {
-            return false;
-        }
+    public static boolean isValidNickname(String nickname, NicknameFormattingLevel formattingLevel,
+            int maximumFormattedLength, int maximumSeparators, Pattern visibleTextPattern,
+            Pattern rgbColorPattern, Pattern colorCodePattern) {
+        if (nickname == null || nickname.isBlank() || formattingLevel == null
+                || maximumFormattedLength < 1 || maximumSeparators < 0
+                || visibleTextPattern == null || rgbColorPattern == null || colorCodePattern == null
+                || nickname.length() > maximumFormattedLength) return false;
 
-        if (formattingLevel == null) return false;
-
-        String visibleNickname = stripNicknameColors(nickname);
-        if (!matches(visibleNickname, NICKNAME_VISIBLE_TEXT)) return false;
-        if (countNicknameSeparators(visibleNickname) > 3) return false;
+        String visibleNickname = stripNicknameColors(nickname, colorCodePattern);
+        if (!matches(visibleNickname, visibleTextPattern)) return false;
+        if (countNicknameSeparators(visibleNickname) > maximumSeparators) return false;
 
         boolean containsFormatting = !visibleNickname.equals(nickname);
         if (formattingLevel == NicknameFormattingLevel.PLAIN && containsFormatting) return false;
         if (formattingLevel == NicknameFormattingLevel.LEGACY_COLORS
-                && NICKNAME_RGB_COLOR.matcher(nickname).find()) return false;
+                && rgbColorPattern.matcher(nickname).find()) return false;
 
         return true;
     }
@@ -176,6 +176,13 @@ public final class Validator {
         return nickname == null ? null : NICKNAME_COLOR_CODE.matcher(nickname).replaceAll("");
     }
 
+    /** Removes color codes using the syntax supplied by the owning module. */
+    public static String stripNicknameColors(String nickname, Pattern colorCodePattern) {
+        if (nickname == null) return null;
+        if (colorCodePattern == null) return nickname;
+        return colorCodePattern.matcher(nickname).replaceAll("");
+    }
+
     /**
      * Produces the case-insensitive lookup key for a nickname. For example,
      * {@code &cPeter}, {@code peter} and {@code PETER} all become {@code peter}.
@@ -185,6 +192,12 @@ public final class Validator {
      */
     public static String normalizeNicknameForLookup(String nickname) {
         String visibleNickname = stripNicknameColors(nickname);
+        return visibleNickname == null ? null : visibleNickname.toLowerCase(Locale.ROOT);
+    }
+
+    /** Produces a lookup key using the color syntax supplied by the module. */
+    public static String normalizeNicknameForLookup(String nickname, Pattern colorCodePattern) {
+        String visibleNickname = stripNicknameColors(nickname, colorCodePattern);
         return visibleNickname == null ? null : visibleNickname.toLowerCase(Locale.ROOT);
     }
 
@@ -203,33 +216,40 @@ public final class Validator {
      * Validates a staff-managed welcome message.
      *
      * <p>Welcome messages may contain Unicode because they are supervised prose,
-     * not searchable player identifiers. They may contain one or two non-empty
-     * lines and at most 70 Unicode code points in total. Color is deliberately
-     * not handled here; the join-message renderer applies one server-owned
-     * color to the complete message.</p>
+     * not searchable player identifiers. This overload applies the standard
+     * 70-code-point and two-line limits.</p>
      *
      * @param welcomeMessage welcome text to validate
      * @return {@code true} when the normalized message is safe to store
      */
     public static boolean isValidWelcomeMessage(String welcomeMessage) {
+        return isValidWelcomeMessage(welcomeMessage, DEFAULT_MAXIMUM_WELCOME_CODE_POINTS,
+                DEFAULT_MAXIMUM_WELCOME_LINES);
+    }
+
+    /**
+     * Validates a welcome message using caller-supplied limits.
+     *
+     * @param welcomeMessage welcome text to validate
+     * @param maximumCodePoints maximum Unicode code points across every line
+     * @param maximumLines maximum non-empty lines
+     * @return {@code true} when the normalized message satisfies the limits
+     */
+    public static boolean isValidWelcomeMessage(String welcomeMessage, int maximumCodePoints,
+            int maximumLines) {
         String normalizedMessage = normalizeWelcomeMessage(welcomeMessage);
-        if (normalizedMessage == null || normalizedMessage.isEmpty()) {
-            return false;
-        }
+        if (normalizedMessage == null || normalizedMessage.isEmpty()
+                || maximumCodePoints < 1 || maximumLines < 1) return false;
 
         String[] lines = normalizedMessage.split("\n", -1);
-        if (lines.length > MAX_WELCOME_LINES) {
-            return false;
-        }
+        if (lines.length > maximumLines) return false;
+
         for (String line : lines) {
-            if (line.isBlank()) {
-                return false;
-            }
+            if (line.isBlank()) return false;
         }
 
-        if (normalizedMessage.codePointCount(0, normalizedMessage.length()) > MAX_WELCOME_CODE_POINTS) {
+        if (normalizedMessage.codePointCount(0, normalizedMessage.length()) > maximumCodePoints)
             return false;
-        }
 
         return normalizedMessage.codePoints()
                 .noneMatch(codePoint -> codePoint != '\n' && Character.isISOControl(codePoint));

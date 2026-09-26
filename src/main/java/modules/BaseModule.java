@@ -520,14 +520,8 @@ public abstract class BaseModule {
      * @param arguments optional positional replacement values
      * @return resolved Adventure component
      */
-    public Component getText(
-            String key,
-            Object... arguments
-    ) {
-        return lang.line(
-                key,
-                arguments
-        );
+    public Component getText(String key, Object... arguments) {
+        return lang.line(key, arguments);
     }
 
     // --- Console / server / world / logger ---

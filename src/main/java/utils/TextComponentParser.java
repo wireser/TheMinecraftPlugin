@@ -10,13 +10,13 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Converts legacy-style message strings (with & codes and #RRGGBB)
- * into Adventure Components via MiniMessage.
+ * Parses MiniMessage while retaining compatibility with stored nickname color
+ * codes in {@code &a} and {@code &#RRGGBB} form.
  */
 public final class TextComponentParser {
 
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
-    private static final Pattern HEX_PATTERN = Pattern.compile("#([A-Fa-f0-9]{6})");
+    private static final Pattern LEGACY_HEX_PATTERN = Pattern.compile("(?i)&#([0-9a-f]{6})");
 
     private static final Map<Character, String> LEGACY_TAGS = new HashMap<>();
 
@@ -62,8 +62,8 @@ public final class TextComponentParser {
 
     @NotNull
     private static String toMiniMessageSyntax(@NotNull String input) {
-        // #RRGGBB -> <#RRGGBB>
-        Matcher matcher = HEX_PATTERN.matcher(input);
+        // Stored RGB nickname color: &#RRGGBB -> <#RRGGBB>
+        Matcher matcher = LEGACY_HEX_PATTERN.matcher(input);
         StringBuffer sb = new StringBuffer();
         while (matcher.find()) {
             String hex = matcher.group(1);
@@ -72,7 +72,7 @@ public final class TextComponentParser {
         matcher.appendTail(sb);
         String withHex = sb.toString();
 
-        // &x -> <color/style>
+        // Stored legacy nickname color/style: &x -> <color/style>
         StringBuilder out = new StringBuilder(withHex.length());
         char[] chars = withHex.toCharArray();
         for (int i = 0; i < chars.length; i++) {
@@ -81,15 +81,7 @@ public final class TextComponentParser {
                 char code = Character.toLowerCase(chars[i + 1]);
                 String tag = LEGACY_TAGS.get(code);
                 if (tag != null) {
-                    if ("reset".equals(tag)) {
-                        out.append("<reset>");
-                    } else if ("bold".equals(tag) || "italic".equals(tag)
-                            || "underlined".equals(tag) || "strikethrough".equals(tag)
-                            || "obfuscated".equals(tag)) {
-                        out.append('<').append(tag).append('>');
-                    } else {
-                        out.append('<').append(tag).append('>');
-                    }
+                    out.append('<').append(tag).append('>');
                     i++;
                     continue;
                 }

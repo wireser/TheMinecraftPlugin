@@ -1,117 +1,61 @@
 package modules;
 
-import command.CommandRegistry;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
+import java.util.Locale;
+
+import enums.GroupType;
 import playerdata.Profile;
 
 /**
- * Example module showing how to:
- * - access config + language
- * - access profiles and database
- * - register commands
- * - use the BaseModule helpers
+ * Copyable starting point for a new one-file module.
+ *
+ * <p>{@link BaseModule} owns lifecycle state, command registration, language,
+ * database access, profile resolution and logging. A concrete module normally
+ * needs only its command declarations and behaviour.</p>
  */
 public final class EmptyModule extends BaseModule {
 
     public EmptyModule() {
-        // moduleName = "EmptyModule", defaultVersion = "1.0.0"
-        super("EmptyModule", "1.0.0");
+        super("Empty", "1.0.0");
     }
 
-    @Override
-    protected void onLoad() {
-        // Called after config is available.
-        // Config: modules/emptymodule/config.yml
-
-        // Example: read a custom setting
-        boolean debug = getConfig().getBoolean("config.debug", false);
-        if (debug) {
-            log("Debug mode enabled from config.");
-        }
-    }
-
+    /** Declares commands; BaseModule registers them with CommandCentral. */
     @Override
     protected void registerCommands() {
-        // Example command: /empty
-        addCommand(new CommandRegistry.Builder("empty", this::handleEmptyCommand)
-            .description("Demo command from EmptyModule")
-            .syntax("/empty [name]")
-            .moduleName(getModuleName())
-            // Example: cost + currency
-            //.cost(10.0, Currency.MONEY)
-            // Example: permission
-            //.permissionNode("tmp.empty.use")
-            .build()
-        );
+        addCommand("empty", command -> command.description("Example module command.")
+                .syntax("/empty [name]").minimumGroup(GroupType.PUNISHED));
     }
 
-    /**
-     * Command handler for /empty.
-     *
-     * Signature matches CommandHandler:
-     * (Profile sender, String label, String[] args)
-     */
-    private void handleEmptyCommand(Profile sender, String label, String[] args) {
-        // Example: use language messages
-        // lang.yml under: modules/emptymodule/lang.yml
-        //
-        // empty.hello: "&aHello from EmptyModule!"
-        // empty.hello_name: "&aHello %1, welcome to EmptyModule!"
-        //
-
-        Component msg;
-        if (args.length >= 1) {
-            msg = getText("empty.hello_name", args[0]);
-        } else {
-            msg = getText("empty.hello");
-        }
-
-        sender.sendMessage(msg);
-
-        // Example: log to console
-        getLogger().info("[EmptyModule] /empty used by " + sender.getIgn());
-
-        // Example: use profile helpers
-        // getPlayer / getOfflinePlayer / getDB etc.
-    }
-
+    /** Routes every command owned by this module. */
     @Override
-    protected void onEnable() {
-        // Called after:
-        // - config/meta loaded
-        // - dependencies checked
-        // - commands registered into CommandCentral
-        // - listeners auto-registered (if any in modules.emptymodule.listeners)
+    public boolean onCommand(Profile sender, String label, String[] arguments) {
+        if (sender == null || label == null) return false;
 
-        log("EmptyModule is now active.");
+        return switch (label.toLowerCase(Locale.ROOT)) {
+            case "empty" -> handleEmpty(sender, arguments);
+            default -> false;
+        };
     }
 
-    @Override
-    protected void onDisable() {
-        // Called when the module is disabled.
-        log("EmptyModule is now disabled.");
-    }
-
-    @Override
-    protected void onReload() {
-        // Called after BaseModule.reload() reloaded config + meta.
-        log("EmptyModule config reloaded.");
-    }
-
-    @Override
-    public boolean onCommand(Profile sender, String label, String[] args) {
-        // Optional: if you map a "module meta" command to this.
-        // For example: /module empty reload → call this from your ModuleManager.
-    	
-        if (args.length >= 1 && args[0].equalsIgnoreCase("info")) {
-            sender.sendMessage(Component.text("Module: " + getModuleName(), NamedTextColor.GOLD));
-            sender.sendMessage(Component.text("Version: " + getModuleVersion(), NamedTextColor.GOLD));
-            sender.sendMessage(Component.text("Enabled: " + isEnabled(), NamedTextColor.GOLD));
+    /** Demonstrates language output without reading lang.yml at command time. */
+    private boolean handleEmpty(Profile sender, String[] arguments) {
+        if (arguments.length == 0) {
+            sender.sendMessage(getText("empty.greeting"));
             return true;
         }
 
-        return false;
+        sender.sendMessage(getText("empty.greeting_named", arguments[0]));
+        return true;
     }
 
+    /** Optional hook called after the module has enabled successfully. */
+    @Override
+    protected void onEnable() {
+        log("Module enabled.");
+    }
+
+    /** Optional hook called before the module is fully disabled. */
+    @Override
+    protected void onDisable() {
+        log("Module disabled.");
+    }
 }
