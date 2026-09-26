@@ -19,11 +19,11 @@ import org.bukkit.inventory.ItemStack;
 
 import enums.FriendshipStatus;
 import enums.GroupType;
-import enums.NicknameFormattingLevel;
 import enums.Perm;
 import model.Group;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import utils.TextComponentParser;
 import utils.Validator;
 
@@ -338,22 +338,19 @@ public final class Profile {
     /**
      * Changes the player's nickname.
      *
-     * <p>The database is updated first, then this profile's local representation
-     * is changed. The storage method required by this function is included
-     * below this class.</p>
+     * <p>Gameplay validation belongs to the module that owns nickname policy.
+     * This method receives both already-prepared database representations,
+     * writes them together and then updates the live cache.</p>
      *
-     * @param nickname new nickname, or {@code null}/blank to remove it
-     * @param formattingLevel color syntax available to the nickname owner
+     * @param formattedNickname display value including allowed colors, or null
+     * @param plainNickname lowercase searchable value without colors, or null
      * @return {@code true} when persistence and the live cache were updated
      */
-    public boolean setNick(String nickname, NicknameFormattingLevel formattingLevel) {
-        String formattedNickname = nickname == null || nickname.isBlank() ? null : nickname;
-        String plainNickname = formattedNickname == null
-                ? null
-                : Validator.normalizeNicknameForLookup(formattedNickname);
+    public boolean setNick(String formattedNickname, String plainNickname) {
+        if ((formattedNickname == null) != (plainNickname == null)) return false;
+        if (formattedNickname != null && (formattedNickname.isBlank() || plainNickname.isBlank()))
+            return false;
 
-        if (formattedNickname != null
-                && !Validator.isValidNickname(formattedNickname, formattingLevel)) return false;
         if (!storage.setNick(this, formattedNickname, plainNickname)) return false;
 
         this.nick = formattedNickname;
@@ -391,7 +388,7 @@ public final class Profile {
      *
      * <p>The nickname is evaluated when this method is called rather than
      * storing a second immutable component that could become stale after
-     * {@link #setNick(String, NicknameFormattingLevel)}.</p>
+     * {@link #setNick(String, String)}.</p>
      *
      * @return nickname if present, otherwise Minecraft username
      */
@@ -699,6 +696,45 @@ public final class Profile {
     }
 
     /**
+     * Sends a component only when this profile currently represents an online
+     * player. Commands resolving offline profiles can call this without adding
+     * their own repeated online-state blocks.
+     *
+     * @param component component to send
+     * @return {@code true} when an online player received the component
+     */
+    public boolean sendMessageIfOnline(Component component) {
+        if (!isOnline() || component == null) return false;
+
+        player.sendMessage(component);
+        return true;
+    }
+
+    /**
+     * Submits a generated message through Bukkit's real player-chat pipeline.
+     *
+     * <p>The component is converted to plain text before submission. The chat
+     * event and its renderer remain responsible for the sender's nickname,
+     * group prefix, color and the selected server chat style.</p>
+     *
+     * <p>Commands and multiline messages are rejected because this method is
+     * exclusively for generated chat text.</p>
+     *
+     * @param component generated message body
+     * @return {@code true} when the message was submitted to player chat
+     */
+    public boolean sendChatMessage(Component component) {
+        if (!isOnline() || component == null) return false;
+
+        String message = PlainTextComponentSerializer.plainText().serialize(component).strip();
+        if (message.isEmpty() || message.startsWith("/")
+                || message.indexOf('\n') >= 0 || message.indexOf('\r') >= 0) return false;
+
+        player.chat(message);
+        return true;
+    }
+
+    /**
      * Sends plain text using the requested Adventure colour.
      *
      * @param color text colour
@@ -867,8 +903,8 @@ public final class Profile {
     /**
      * Changes the player's welcome message.
      *
-     * <p>Welcome text is normalized and validated before the database or RAM
-     * cache is changed.</p>
+     * <p>Gameplay limits are checked by the owning module. This method only
+     * normalizes line endings, persists the value and updates the live cache.</p>
      *
      * @param welcome new message or null
      * @return {@code true} when persistence and the live cache were updated
@@ -877,7 +913,6 @@ public final class Profile {
         String normalizedWelcome = welcome == null || welcome.isBlank()
                 ? null
                 : Validator.normalizeWelcomeMessage(welcome);
-        if (normalizedWelcome != null && !Validator.isValidWelcomeMessage(normalizedWelcome)) return false;
         if (!storage.setWelcome(this, normalizedWelcome)) return false;
 
         if (onlineCacheEnabled) this.welcome = normalizedWelcome;
