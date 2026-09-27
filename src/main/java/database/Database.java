@@ -449,7 +449,7 @@ public final class Database {
             return false;
         }
 
-        try (Connection ignored = dataSource.getConnection()) {
+        try (Connection _ /* ignored */ = dataSource.getConnection()) {
             return true;
         } catch (SQLException ex) {
             logger.log(Level.WARNING, "Database health check failed.", ex);

@@ -47,7 +47,7 @@ public final class PlayersModule extends BaseModule {
             Pattern.compile("(?i)(?:&#[0-9a-f]{6}|&[0-9a-fr])");
 
     /** Most recent account name observed during this server session. */
-    private String lastJoinedUsername;
+    public String lastJoinedUsername;
 
     /** Active welcome state keyed by the joined player's permanent id. */
     private final Map<Integer, WelcomeSession> welcomeSessions = new HashMap<>();

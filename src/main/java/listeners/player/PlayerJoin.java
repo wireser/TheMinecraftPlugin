@@ -88,13 +88,13 @@ public final class PlayerJoin implements Listener {
          */
         String welcomeMessage = profile.getWelcome();
         if (welcomeMessage != null && !welcomeMessage.isBlank()) {
-            Component welcomeComponent = Component.text(welcomeMessage, NamedTextColor.LIGHT_PURPLE);
+            Component welcomeComponent = Component.text(">> ", NamedTextColor.GREEN).append(Component.text(welcomeMessage));
             Component joinMessage = event.joinMessage();
             event.joinMessage(joinMessage == null
                     ? welcomeComponent
-                    : welcomeComponent.append(Component.newline()).append(joinMessage));
+                    : welcomeComponent.append(Component.newline()).append(Component.text("", NamedTextColor.YELLOW)).append(joinMessage));
         }
-
+        
         /*
          * Keep this INFO message while testing the new profile lifecycle.
          * Once we're confident everything works, we can remove/downgrade it.
