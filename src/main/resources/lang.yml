@@ -19,6 +19,24 @@ economy:
   balance: "<yellow>>> Your current bank balance is <white>%1<yellow>, safely stored until you need it."
   wallet: "<yellow>>> You currently have <white>%1 <yellow>available to spend from your wallet."
 
+timers:
+  usage: "<yellow>>> Timer administration: <white>/ticker get <player> <timer><yellow>, <white>/ticker set <player> <timer> <time|infinite><yellow>, <white>/ticker add <player> <timer> <time><yellow>, <white>/ticker sub <player> <timer> <time><yellow>, or <white>/ticker reset <player> <timer><yellow>. Time units: <white>s, m, h, d, w<yellow>."
+  unknown_action: "<red>Unknown timer action: <white>%1<red>."
+  player_not_found: "<red>No registered player was found with the username <white>%1<red>."
+  invalid_key: "<red><white>%1 <red>is not a valid timer key. Use 1-64 lowercase letters, numbers, dots, underscores or hyphens, beginning with a letter."
+  invalid_duration: "<red><white>%1 <red>is not a valid duration. Combine <white>s, m, h, d, w <red>without spaces, for example <white>1h30m<red>."
+  inactive: "<yellow>>> <white>%1<yellow>'s <white>%2 <yellow>timer is not active."
+  active_indefinite: "<yellow>>> <white>%1<yellow>'s <white>%2 <yellow>timer is active indefinitely."
+  active_finite: "<yellow>>> <white>%1<yellow>'s <white>%2 <yellow>timer expires at <white>%3 <yellow>(<white>%4 <yellow>remaining)."
+  set_indefinite: "<yellow>>> Set <white>%1<yellow>'s <white>%2 <yellow>timer to indefinite."
+  set_finite: "<yellow>>> Set <white>%1<yellow>'s <white>%2 <yellow>timer for <white>%4<yellow>; it expires at <white>%3<yellow>."
+  added: "<yellow>>> Added <white>%1 <yellow>to <white>%2<yellow>'s <white>%3 <yellow>timer. New expiry: <white>%4<yellow>."
+  subtracted: "<yellow>>> Removed <white>%1 <yellow>from <white>%2<yellow>'s <white>%3 <yellow>timer. New expiry: <white>%4<yellow>."
+  ended_by_subtraction: "<yellow>>> <white>%1<yellow>'s <white>%2 <yellow>timer reached zero and was removed."
+  reset: "<yellow>>> Reset <white>%1<yellow>'s <white>%2 <yellow>timer."
+  indefinite_change_rejected: "<red><white>%1<red>'s <white>%2 <red>timer is indefinite. Set or reset it instead."
+  database_error: "<red>The timer change could not be saved. Nothing was changed; check the console."
+
 locations:
   spawn:
     unavailable: "<dark_purple>The road to spawn has gone quiet. Its anchor may be missing."
@@ -69,16 +87,20 @@ players:
     request_declined_target: "<yellow>>> <white>%1 <yellow>declined your friend request."
 
   list:
-    none: "nobody"
-    available_basic: "<yellow>>> Available lists: <white>online<yellow>, <white>staff<yellow>."
-    available_player: "<yellow>>> Available lists: <white>trust<yellow>, <white>friends<yellow>, <white>online<yellow>, <white>staff<yellow>."
+    available_basic: "<yellow>>> Available lists: <white>online<yellow> and <white>staff<yellow>. Use <white>/list help <yellow>for details."
+    available_player: "<yellow>>> Available lists: <white>trust<yellow>, <white>friends<yellow>, <white>online<yellow> and <white>staff<yellow>. Use <white>/list help <yellow>for details."
+    help_basic: "<yellow>>> <white>/list online <yellow>shows everyone online. <white>/list staff <yellow>shows staff currently available."
+    help_player: "<yellow>>> <white>/list trust <yellow>shows direct trust, <white>/list friends <yellow>shows friends and requests, <white>/list online <yellow>shows everyone online, and <white>/list staff <yellow>shows available staff."
     unknown: "<red>There is no player list named <white>%1<red>."
-    trust: "<yellow>>> Players you explicitly trust: <white>%1"
-    friends: "<yellow>>> Friends: <white>%1"
-    incoming: "<yellow>>> Incoming friend requests: <white>%1"
-    outgoing: "<yellow>>> Sent friend requests: <white>%1"
-    online: "<yellow>>> Players online: <white>%1"
-    staff: "<yellow>>> Staff online: <white>%1"
+    trust_entries: "<yellow>>> Trusted players (<white>%1<yellow>):\n<gray>   %2"
+    trust_empty: "<yellow>>> You have not given anyone direct trust yet. Use <white>/trust <player> <yellow>when someone needs access to your protected spaces."
+    friend_entries: "<yellow>>> Friends (<white>%1<yellow>):\n<gray>   %2"
+    friends_empty: "<yellow>>> You have no friends or pending requests yet. Use <white>/friend <player> <yellow>to send a request."
+    incoming_entries: "<yellow>>> Incoming requests (<white>%1<yellow>):\n<gray>   %2"
+    outgoing_entries: "<yellow>>> Sent requests (<white>%1<yellow>):\n<gray>   %2"
+    online_entries: "<yellow>>> Players online (<white>%1<yellow>):\n<gray>   %2"
+    staff_entries: "<yellow>>> Staff online (<white>%1<yellow>):\n<gray>   %2"
+    staff_empty: "<yellow>>> No staff members are currently online."
 
   nick:
     own: "<yellow>>> Around here, people know you as %1<yellow>."
@@ -97,7 +119,7 @@ players:
   welcome:
     no_recent_arrival: "<yellow>>> Nobody has joined since the Players module started."
     target_offline: "<red>%1 is not online to receive a welcome."
-    cannot_welcome_self: "<red>You cannot welcome yourself. You came through the gate together."
+    cannot_welcome_yourself: "<red>You cannot welcome yourself. Leave that honor to someone else."
     already_welcomed: "<yellow>>> You have already welcomed <white>%1<yellow>."
     send_failed: "<red>Your welcome could not be sent through chat."
     player_help: "<yellow>>> Use <white>/welcome <yellow>to greet the latest arrival, or <white>/welcome <player> <yellow>for someone online."

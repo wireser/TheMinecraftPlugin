@@ -175,10 +175,7 @@ public final class ProfileManager {
          */
         String nick = storage.getNick(playerId);
 
-        /*
-         * Group resolution is intentionally left nullable until the group/rank
-         * system is connected to ProfileManager.
-         */
+        /* The stored group is the permanent assignment; runtime overrides live in Profile. */
         Group group = storage.loadPlayerGroupType(playerId).getGroup();
 
         /*
@@ -445,6 +442,63 @@ public final class ProfileManager {
     }
 
     /**
+     * Returns registered username suggestions, including offline players.
+     *
+     * @param prefix partial username entered by the command sender
+     * @param excludedPlayerId player omitted from the result, or zero for none
+     * @param limit maximum number of results
+     * @return matching registered usernames
+     */
+    public List<String> suggestRegisteredUsernames(String prefix, int excludedPlayerId, int limit) {
+        return storage.searchRegisteredUsernames(prefix, excludedPlayerId, limit);
+    }
+
+    /**
+     * Returns username suggestions from one player's explicit trust list.
+     *
+     * @param profile owner of the trust list
+     * @param prefix partial username entered by the command sender
+     * @param limit maximum number of results
+     * @return matching trusted usernames
+     */
+    public List<String> suggestTrustedUsernames(Profile profile, String prefix, int limit) {
+        return storage.searchTrustedUsernames(profile, prefix, limit);
+    }
+
+    /**
+     * Returns accepted friends and pending-request usernames for removal.
+     *
+     * @param profile one side of the relationship
+     * @param prefix partial username entered by the command sender
+     * @param limit maximum number of results
+     * @return matching friend-connection usernames
+     */
+    public List<String> suggestFriendConnectionUsernames(Profile profile, String prefix, int limit) {
+        return storage.searchFriendConnectionUsernames(profile, prefix, limit);
+    }
+
+    /**
+     * Returns matching online usernames without touching persistent storage.
+     *
+     * @param prefix partial username entered by the command sender
+     * @param excludedPlayerId player omitted from the result, or zero for none
+     * @param limit maximum number of results
+     * @return matching online usernames
+     */
+    public List<String> suggestOnlineUsernames(String prefix, int excludedPlayerId, int limit) {
+        String enteredPrefix = prefix == null ? "" : prefix.toLowerCase(java.util.Locale.ROOT);
+
+        return online.values().stream()
+                .filter(profile -> profile.getId() != excludedPlayerId)
+                .map(Profile::getIgn)
+                .filter(Objects::nonNull)
+                .filter(name -> name.toLowerCase(java.util.Locale.ROOT).startsWith(enteredPrefix))
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .limit(Math.max(0, limit))
+                .toList();
+    }
+
+    /**
      * Optional wrapper around {@link #resolveById(int)}.
      *
      * @param id database player id
@@ -553,7 +607,7 @@ public final class ProfileManager {
      * @param uuid Mojang UUID
      * @param ign last/current Minecraft name
      * @param nick stored nickname
-     * @param group resolved group, currently nullable
+     * @param group permanent group resolved from {@code players.group_id}
      * @param player Bukkit player when online; {@code null} when offline
      * @return constructed profile
      */

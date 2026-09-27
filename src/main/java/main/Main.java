@@ -1,5 +1,7 @@
 package main;
 
+import java.util.List;
+
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -17,6 +19,7 @@ import managers.YamlLanguageManager;
 import modules.EconomyModule;
 import modules.LocationsModule;
 import modules.PlayersModule;
+import modules.TimersModule;
 import playerdata.Profile;
 import playerdata.ProfileManager;
 import playerdata.ProfileStorage;
@@ -92,6 +95,7 @@ public class Main extends JavaPlugin
 		moduleManager = new ModuleManager(database);
 
         // Register modules here
+		moduleManager.registerModule(new TimersModule());
 		moduleManager.registerModule(new PlayersModule());
 		moduleManager.registerModule(new LocationsModule());
 		moduleManager.registerModule(new EconomyModule());
@@ -99,6 +103,7 @@ public class Main extends JavaPlugin
         // Load + enable in dependency order
 		registerModules();
 		moduleManager.bootstrapModules();
+		moduleManager.startScheduler();
 
 		getServer().getPluginManager().registerEvents(
 		        new listeners.player.PlayerJoin(),
@@ -131,6 +136,7 @@ public class Main extends JavaPlugin
 	public void onDisable() {
 
 		if (moduleManager != null) {
+            moduleManager.stopScheduler();
             moduleManager.disableAll();
             moduleManager.shutdownAll();
         }
@@ -181,6 +187,19 @@ public class Main extends JavaPlugin
 
 	    return commandCentral.execute(profile, cmd, label, args);
 	}
+
+    /** Routes Bukkit tab completion through the same central command registry. */
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command,
+            String alias, String[] arguments) {
+        if (commandCentral == null || profileManager == null
+                || !(sender instanceof Player player)) return List.of();
+
+        Profile profile = profileManager.resolveOnline(player);
+        if (profile == null) return List.of();
+
+        return commandCentral.complete(profile, command, alias, arguments);
+    }
 
 
 	/**

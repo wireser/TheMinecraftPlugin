@@ -64,10 +64,10 @@ import utils.Validator;
  *     <li>statistics after their first access</li>
  * </ul>
  *
- * <p>Stored locations, timers, bans and arbitrary boolean settings remain
- * database-backed for now. Those values either change infrequently, have
- * time-sensitive semantics, or require additional storage APIs before caching
- * them safely.</p>
+ * <p>Stored locations and arbitrary boolean settings remain database-backed
+ * for now. Module-owned values, including balances and timers, are cached by
+ * their owning modules rather than turning this core profile into a container
+ * for every feature in the plugin.</p>
  */
 public final class Profile {
 
@@ -110,10 +110,17 @@ public final class Profile {
      */
     private String nick;
 
+    /** Permanent group persisted in {@code players.group_id}. */
+    private Group assignedGroup;
+
     /**
-     * Current group/rank.
+     * Temporary runtime replacement for permission and command access.
+     *
+     * <p>This is never written over {@link #assignedGroup}. A punishment or
+     * other temporary system can therefore lower the effective group and later
+     * restore normal access without reloading or rewriting the profile.</p>
      */
-    private Group group;
+    private Group effectiveGroupOverride;
 
     /**
      * Bukkit player while this profile represents an online session.
@@ -192,7 +199,7 @@ public final class Profile {
      * @param uuid Mojang UUID
      * @param ign current/last-known username
      * @param nick stored nickname, may be {@code null}
-     * @param group current group, may be {@code null}
+     * @param assignedGroup permanent database-backed group
      * @param player Bukkit player for online profiles, otherwise {@code null}
      * @param initialFlags initial plugin flags, may be {@code null}
      */
@@ -202,7 +209,7 @@ public final class Profile {
             UUID uuid,
             String ign,
             String nick,
-            Group group,
+            Group assignedGroup,
             Player player,
             List<Perm> initialFlags
     ) {
@@ -212,7 +219,7 @@ public final class Profile {
         this.uuid = Objects.requireNonNull(uuid, "uuid");
         this.ign = ign;
         this.nick = nick;
-        this.group = group;
+        this.assignedGroup = Objects.requireNonNull(assignedGroup, "assignedGroup");
         this.player = player;
 
         this.onlineCacheEnabled = player != null;
@@ -277,6 +284,7 @@ public final class Profile {
         }
 
         this.nick = storage.getNick(id);
+        this.assignedGroup = storage.loadPlayerGroupType(id).getGroup();
 
         this.flags.clear();
         this.flags.addAll(storage.loadFlags(id));
@@ -400,20 +408,57 @@ public final class Profile {
         return getNameComponent();
     }
 
-    /**
-     * @return current group/rank, or {@code null} if unresolved
-     */
-    public Group getGroup() {
-        return group;
+    /** @return permanent group stored in {@code players.group_id} */
+    public Group getAssignedGroup() {
+        return assignedGroup;
     }
 
     /**
-     * Updates the runtime group reference.
-     *
-     * @param group new group
+     * Returns the group currently governing permissions and command access.
+     * A temporary override wins without modifying the assigned group.
      */
-    public void setGroup(Group group) {
-        this.group = group;
+    public Group getEffectiveGroup() {
+        return effectiveGroupOverride != null ? effectiveGroupOverride : assignedGroup;
+    }
+
+    /**
+     * Compatibility name used by command and chat code.
+     *
+     * @return the effective group, never the hidden assigned group
+     */
+    public Group getGroup() {
+        return getEffectiveGroup();
+    }
+
+    /**
+     * Updates the permanent group after {@code players.group_id} was saved.
+     * Any active temporary override remains in force.
+     */
+    public void setAssignedGroup(Group assignedGroup) {
+        this.assignedGroup = Objects.requireNonNull(assignedGroup, "assignedGroup");
+    }
+
+    /**
+     * Temporarily replaces the group used for access checks without changing
+     * the player's permanent rank.
+     */
+    public void setEffectiveGroupOverride(Group groupOverride) {
+        this.effectiveGroupOverride = Objects.requireNonNull(groupOverride, "groupOverride");
+    }
+
+    /** Convenience overload for code using the canonical group enum. */
+    public void setEffectiveGroupOverride(GroupType groupType) {
+        setEffectiveGroupOverride(Objects.requireNonNull(groupType, "groupType").getGroup());
+    }
+
+    /** Restores the assigned group as the effective group. */
+    public void clearEffectiveGroupOverride() {
+        effectiveGroupOverride = null;
+    }
+
+    /** @return whether a temporary group currently replaces the assigned group */
+    public boolean hasEffectiveGroupOverride() {
+        return effectiveGroupOverride != null;
     }
 
     /**
@@ -423,8 +468,17 @@ public final class Profile {
      * @return {@code true} when this profile belongs to that group or a child
      */
     public boolean meetsMinimumGroup(GroupType minimumGroup) {
-        return group != null && minimumGroup != null
-                && group.inheritsFrom(minimumGroup.getGroup());
+        Group effectiveGroup = getEffectiveGroup();
+        return minimumGroup != null && effectiveGroup.inheritsFrom(minimumGroup.getGroup());
+    }
+
+    /**
+     * Checks permanent-rank entitlements without considering a temporary
+     * access override. Use this for owned perks such as nickname formatting;
+     * permission checks should continue to use {@link #meetsMinimumGroup(GroupType)}.
+     */
+    public boolean meetsMinimumAssignedGroup(GroupType minimumGroup) {
+        return minimumGroup != null && assignedGroup.inheritsFrom(minimumGroup.getGroup());
     }
 
     // ======================================================================
@@ -675,7 +729,7 @@ public final class Profile {
             return true;
         }
 
-        return group != null && group.canUseCommand(node);
+        return getEffectiveGroup().canUseCommand(node);
     }
 
     // ======================================================================
@@ -917,36 +971,6 @@ public final class Profile {
 
         if (onlineCacheEnabled) this.welcome = normalizedWelcome;
         return true;
-    }
-
-    // ======================================================================
-    // Ban / timers
-    // ======================================================================
-
-    /**
-     * Checks current ban state.
-     *
-     * <p>Ban state remains storage-backed because temporary bans contain
-     * time-sensitive expiration information.</p>
-     *
-     * @return true when currently banned
-     */
-    public boolean isBanned() {
-        return storage.isBanned(this);
-    }
-
-    /**
-     * Checks a current timer/ticker.
-     *
-     * @param key timer key
-     * @return true while active
-     */
-    public boolean hasTicker(String key) {
-        if (key == null || key.isBlank()) {
-            return false;
-        }
-
-        return storage.hasActiveTimer(this, key);
     }
 
     // ======================================================================

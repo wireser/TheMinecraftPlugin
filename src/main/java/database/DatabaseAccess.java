@@ -384,6 +384,51 @@ public final class DatabaseAccess {
     }
 
     /**
+     * Loads several columns from every row matching a prepared WHERE clause.
+     *
+     * <p>This is the list counterpart of {@link #getRow(String, List, String, List)}.
+     * It is useful for sparse child tables such as timers, locations and
+     * relationships where one player may own zero or more rows.</p>
+     *
+     * @param table table to read
+     * @param columns columns copied into each returned map
+     * @param whereClause optional WHERE clause using {@code ?} placeholders
+     * @param parameters values bound to the WHERE clause
+     * @return rows in database order; never {@code null}
+     * @throws SQLException if the query fails
+     */
+    public List<Map<String, Object>> getRows(String table, List<String> columns,
+            String whereClause, List<?> parameters) throws SQLException {
+        Objects.requireNonNull(columns, "columns");
+
+        if (columns.isEmpty()) {
+            throw new IllegalArgumentException("columns must not be empty.");
+        }
+
+        validateIdentifier(table, "table");
+        for (String column : columns) validateIdentifier(column, "column");
+
+        StringBuilder sql = new StringBuilder("SELECT ");
+        for (int index = 0; index < columns.size(); index++) {
+            if (index > 0) sql.append(", ");
+            sql.append(quoteIdentifier(columns.get(index)));
+        }
+        sql.append(" FROM ").append(quoteIdentifier(table));
+
+        if (whereClause != null && !whereClause.isBlank()) {
+            sql.append(" WHERE ").append(whereClause);
+        }
+
+        return queryList(sql.toString(), parameters, 0, resultSet -> {
+            Map<String, Object> valuesByColumn = new LinkedHashMap<>();
+            for (String column : columns) {
+                valuesByColumn.put(column, resultSet.getObject(column));
+            }
+            return valuesByColumn;
+        });
+    }
+
+    /**
      * Executes an UPDATE on the given table.
      *
      * @param table        table name
@@ -866,7 +911,7 @@ public final class DatabaseAccess {
      * <p>
      * Example usage:
      * <pre>
-     *   List&lt;String&gt; names = sql.searchPrefix("players", "username", "the", 20);
+     *   List&lt;String&gt; names = sql.searchPrefix("players", "name", "the", 20);
      * </pre>
      *
      * @param table   table name
@@ -881,29 +926,62 @@ public final class DatabaseAccess {
                                      String prefix,
                                      int limit) throws SQLException {
 
+        return searchPrefix(table, column, prefix, null, Collections.emptyList(), limit);
+    }
+
+    /**
+     * Performs an indexed prefix lookup with an optional additional condition.
+     *
+     * <p>This is the shared database primitive behind command suggestions such
+     * as usernames and warp names. Domain storage classes supply fixed table,
+     * column and condition values; player input is always passed as a bound
+     * parameter.</p>
+     *
+     * <p>SQL wildcard characters in the entered prefix are escaped, so a
+     * Minecraft underscore remains a literal underscore instead of matching
+     * any character.</p>
+     *
+     * @param table table containing the searchable value
+     * @param column indexed string column to search
+     * @param prefix text already entered by the player
+     * @param additionalCondition optional SQL condition without {@code WHERE}
+     * @param conditionParameters parameters used by the additional condition
+     * @param limit maximum number of suggestions; values above 100 are capped
+     * @return matching values ordered alphabetically
+     * @throws SQLException if the lookup fails
+     */
+    public List<String> searchPrefix(String table, String column, String prefix,
+            String additionalCondition, List<?> conditionParameters, int limit)
+            throws SQLException {
+
         validateIdentifier(table, "table");
         validateIdentifier(column, "column");
 
-        if (prefix == null) {
-            prefix = "";
-        }
-
-        if (limit <= 0) {
-            limit = 20;
-        }
+        String safePrefix = prefix == null ? "" : prefix;
+        int resultLimit = limit <= 0 ? 20 : Math.min(limit, 100);
 
         StringBuilder sql = new StringBuilder();
         sql.append("SELECT ").append(quoteIdentifier(column))
                 .append(" FROM ").append(quoteIdentifier(table))
-                .append(" WHERE ").append(quoteIdentifier(column)).append(" LIKE ?")
-                .append(" ORDER BY ").append(quoteIdentifier(column)).append(" ASC")
-                .append(" LIMIT ?");
+                .append(" WHERE ").append(quoteIdentifier(column)).append(" LIKE ? ESCAPE '!'");
 
-        List<Object> params = new ArrayList<>(2);
-        params.add(prefix + "%");
-        params.add(limit);
+        List<Object> parameters = new ArrayList<>();
+        parameters.add(escapeLikePrefix(safePrefix) + "%");
 
-        return queryList(sql.toString(), params, limit, rs -> rs.getString(1));
+        if (additionalCondition != null && !additionalCondition.isBlank()) {
+            sql.append(" AND (").append(additionalCondition).append(')');
+            if (conditionParameters != null) parameters.addAll(conditionParameters);
+        }
+
+        sql.append(" ORDER BY ").append(quoteIdentifier(column)).append(" ASC")
+                .append(" LIMIT ").append(resultLimit);
+
+        return queryList(sql.toString(), parameters, resultLimit, rs -> rs.getString(1));
+    }
+
+    /** Escapes the custom {@code !} escape marker and SQL LIKE wildcards. */
+    private static String escapeLikePrefix(String prefix) {
+        return prefix.replace("!", "!!").replace("%", "!%").replace("_", "!_");
     }
 
     // ======================================================================
@@ -998,6 +1076,20 @@ public final class DatabaseAccess {
         int updated = executeUpdate(sql.toString(), params);
         if (updated > 0) {
             return updated;
+        }
+
+        /*
+         * MySQL reports zero affected rows when the matching row already
+         * contains the requested values. That is still a successful upsert;
+         * attempting INSERT in that case would produce a duplicate-key error.
+         */
+        StringBuilder keyWhere = new StringBuilder();
+        for (int i = 0; i < keyColumns.size(); i++) {
+            if (i > 0) keyWhere.append(" AND ");
+            keyWhere.append(quoteIdentifier(keyColumns.get(i))).append(" = ?");
+        }
+        if (count(table, keyWhere.toString(), keyValues) > 0) {
+            return 1;
         }
 
         // 2) INSERT (no row existed)

@@ -30,6 +30,9 @@ public final class PlayersModule extends BaseModule {
     /** Maximum number of random welcome templates accepted from lang.yml. */
     private static final int MAX_RANDOM_WELCOME_MESSAGES = 32;
 
+    /** Maximum database-backed suggestions returned for one command argument. */
+    private static final int MAX_COMMAND_SUGGESTIONS = 20;
+
     /** Used when the configured welcome list is missing, empty or invalid. */
     private static final String DEFAULT_RANDOM_WELCOME_MESSAGE =
             "Hello %1! Good to see you!";
@@ -47,7 +50,7 @@ public final class PlayersModule extends BaseModule {
             Pattern.compile("(?i)(?:&#[0-9a-f]{6}|&[0-9a-fr])");
 
     /** Most recent account name observed during this server session. */
-    public String lastJoinedUsername;
+    private String lastJoinedUsername;
 
     /** Active welcome state keyed by the joined player's permanent id. */
     private final Map<Integer, WelcomeSession> welcomeSessions = new HashMap<>();
@@ -60,19 +63,26 @@ public final class PlayersModule extends BaseModule {
     @Override
     protected void registerCommands() {
         addCommand("trust", command -> command.description("Trust a player with your protected space.")
-                .syntax("/trust [player]").minimumGroup(GroupType.PLAYER));
+                .syntax("/trust [player]").minimumGroup(GroupType.PLAYER)
+                .tabHandler(this::suggestRegisteredPlayers));
         addCommand("untrust", command -> command.description("Remove explicit trust from a player.")
-                .syntax("/untrust [player]").minimumGroup(GroupType.PLAYER));
+                .syntax("/untrust [player]").minimumGroup(GroupType.PLAYER)
+                .tabHandler(this::suggestTrustedPlayers));
         addCommand("friend", command -> command.description("Send or accept a friend request.")
-                .syntax("/friend [player]").minimumGroup(GroupType.PLAYER));
+                .syntax("/friend [player]").minimumGroup(GroupType.PLAYER)
+                .tabHandler(this::suggestRegisteredPlayers));
         addCommand("unfriend", command -> command.description("Cancel a request or remove a friend.")
-                .syntax("/unfriend [player]").minimumGroup(GroupType.PLAYER));
+                .syntax("/unfriend [player]").minimumGroup(GroupType.PLAYER)
+                .tabHandler(this::suggestFriendConnections));
         addCommand("list", command -> command.description("View one of the server's player lists.")
-                .syntax("/list [trust|friends|online|staff]").minimumGroup(GroupType.PUNISHED));
+                .syntax("/list [help|trust|friends|online|staff]")
+                .minimumGroup(GroupType.PUNISHED).tabHandler(this::suggestPlayerLists));
         addCommand("nick", command -> command.description("View a player's nickname.")
-                .syntax("/nick [username|nickname]").minimumGroup(GroupType.PUNISHED));
+                .syntax("/nick [username|nickname]").minimumGroup(GroupType.PUNISHED)
+                .tabHandler(this::suggestNicknameArguments));
         addCommand("welcome", command -> command.description("Welcome the latest or a named player.")
-                .syntax("/welcome [player|help]").minimumGroup(GroupType.PUNISHED));
+                .syntax("/welcome [player|help]").minimumGroup(GroupType.PUNISHED)
+                .tabHandler(this::suggestWelcomeArguments));
     }
 
     /** Routes a registered root label to its command handler. */
@@ -103,6 +113,14 @@ public final class PlayersModule extends BaseModule {
         if (pendingRequests > 0) {
             profile.sendMessage(getText("players.friend.pending_notice", pendingRequests));
         }
+    }
+
+    /**
+     * Returns the most recent player's account name for read-only use by other
+     * modules. The value is session-only and may be {@code null}.
+     */
+    public String getLastJoinedUsername() {
+        return lastJoinedUsername;
     }
 
     /** Removes welcome state when an online profile leaves the server. */
@@ -286,6 +304,7 @@ public final class PlayersModule extends BaseModule {
         }
 
         return switch (arguments[0].toLowerCase(Locale.ROOT)) {
+            case "help" -> showListHelp(sender);
             case "trust" -> listTrustedPlayers(sender);
             case "friends" -> listFriendships(sender);
             case "online" -> listOnlinePlayers(sender, false);
@@ -412,9 +431,7 @@ public final class PlayersModule extends BaseModule {
         if (!Validator.isValidNickname(nickname, formattingLevel,
                 MAXIMUM_FORMATTED_NICKNAME_LENGTH, MAXIMUM_NICKNAME_SEPARATORS,
                 NICKNAME_VISIBLE_TEXT, NICKNAME_RGB_COLOR, NICKNAME_COLOR_CODE)) {
-            String groupName = target.getGroup() == null
-                    ? "current"
-                    : target.getGroup().getDisplayName();
+            String groupName = target.getAssignedGroup().getDisplayName();
             sender.sendMessage(getText("players.nick.invalid", groupName));
             return true;
         }
@@ -538,16 +555,33 @@ public final class PlayersModule extends BaseModule {
     private boolean listTrustedPlayers(Profile sender) {
         if (!requirePlayerGroup(sender)) return true;
 
-        sendNames(sender, "players.list.trust", resolveNames(sender.getTrustedIds()));
+        sendNames(sender, "players.list.trust_entries", "players.list.trust_empty",
+                resolveNames(sender.getTrustedIds()));
         return true;
     }
 
     private boolean listFriendships(Profile sender) {
         if (!requirePlayerGroup(sender)) return true;
 
-        sendNames(sender, "players.list.friends", resolveNames(sender.getFriendIds()));
-        sendNames(sender, "players.list.incoming", resolveNames(sender.getIncomingFriendRequestIds()));
-        sendNames(sender, "players.list.outgoing", resolveNames(sender.getOutgoingFriendRequestIds()));
+        List<String> friends = resolveNames(sender.getFriendIds());
+        List<String> incomingRequests = resolveNames(sender.getIncomingFriendRequestIds());
+        List<String> outgoingRequests = resolveNames(sender.getOutgoingFriendRequestIds());
+
+        if (friends.isEmpty() && incomingRequests.isEmpty() && outgoingRequests.isEmpty()) {
+            sender.sendMessage(getText("players.list.friends_empty"));
+            return true;
+        }
+
+        if (!friends.isEmpty()) {
+            sendNames(sender, "players.list.friend_entries", null, friends);
+        }
+        if (!incomingRequests.isEmpty()) {
+            sendNames(sender, "players.list.incoming_entries", null, incomingRequests);
+        }
+        if (!outgoingRequests.isEmpty()) {
+            sendNames(sender, "players.list.outgoing_entries", null, outgoingRequests);
+        }
+
         return true;
     }
 
@@ -558,7 +592,17 @@ public final class PlayersModule extends BaseModule {
                 .sorted(String.CASE_INSENSITIVE_ORDER)
                 .toList();
 
-        sendNames(sender, staffOnly ? "players.list.staff" : "players.list.online", names);
+        sendNames(sender, staffOnly ? "players.list.staff_entries" : "players.list.online_entries",
+                staffOnly ? "players.list.staff_empty" : null, names);
+        return true;
+    }
+
+    /** Explains the list types available to the sender's group. */
+    private boolean showListHelp(Profile sender) {
+        String key = sender.meetsMinimumGroup(GroupType.PLAYER)
+                ? "players.list.help_player"
+                : "players.list.help_basic";
+        sender.sendMessage(getText(key));
         return true;
     }
 
@@ -577,10 +621,15 @@ public final class PlayersModule extends BaseModule {
         return names;
     }
 
-    private void sendNames(Profile sender, String key, List<String> names) {
-        String joinedNames = names.isEmpty() ? lang.plain("players.list.none")
-                : String.join(", ", names);
-        sender.sendMessage(getText(key, joinedNames));
+    /** Sends either a counted name list or its purpose-specific empty message. */
+    private void sendNames(Profile sender, String populatedKey, String emptyKey,
+            List<String> names) {
+        if (names.isEmpty()) {
+            if (emptyKey != null) sender.sendMessage(getText(emptyKey));
+            return;
+        }
+
+        sender.sendMessage(getText(populatedKey, names.size(), String.join(", ", names)));
     }
 
     /** Resolves only registered Minecraft usernames for mutation commands. */
@@ -608,9 +657,93 @@ public final class PlayersModule extends BaseModule {
 
     /** Determines which nickname color syntax the nickname owner may use. */
     private NicknameFormattingLevel nicknameFormattingLevel(Profile target) {
-        if (target.meetsMinimumGroup(GroupType.MODERATOR)) return NicknameFormattingLevel.RGB_COLORS;
-        if (target.meetsMinimumGroup(GroupType.DONATOR)) return NicknameFormattingLevel.LEGACY_COLORS;
+        if (target.meetsMinimumAssignedGroup(GroupType.MODERATOR)) return NicknameFormattingLevel.RGB_COLORS;
+        if (target.meetsMinimumAssignedGroup(GroupType.DONATOR)) return NicknameFormattingLevel.LEGACY_COLORS;
         return NicknameFormattingLevel.PLAIN;
+    }
+
+    // ======================================================================
+    // Command suggestions
+    // ======================================================================
+
+    /** Suggests registered usernames, including offline players. */
+    private List<String> suggestRegisteredPlayers(Profile sender, String label, String[] arguments) {
+        if (arguments.length != 1) return List.of();
+        return profiles().suggestRegisteredUsernames(arguments[0], sender.getId(),
+                MAX_COMMAND_SUGGESTIONS);
+    }
+
+    /** Suggests only players explicitly trusted by the command sender. */
+    private List<String> suggestTrustedPlayers(Profile sender, String label, String[] arguments) {
+        if (arguments.length != 1) return List.of();
+        return profiles().suggestTrustedUsernames(sender, arguments[0], MAX_COMMAND_SUGGESTIONS);
+    }
+
+    /** Suggests friends and either direction of a pending friend request. */
+    private List<String> suggestFriendConnections(Profile sender, String label, String[] arguments) {
+        if (arguments.length != 1) return List.of();
+        return profiles().suggestFriendConnectionUsernames(sender, arguments[0],
+                MAX_COMMAND_SUGGESTIONS);
+    }
+
+    /** Suggests only list names the sender can actually open. */
+    private List<String> suggestPlayerLists(Profile sender, String label, String[] arguments) {
+        if (arguments.length != 1) return List.of();
+
+        List<String> suggestions = new ArrayList<>(List.of("help", "online", "staff"));
+        if (sender.meetsMinimumGroup(GroupType.PLAYER)) {
+            suggestions.add("trust");
+            suggestions.add("friends");
+        }
+        return suggestions;
+    }
+
+    /** Suggests nickname actions and registered player targets. */
+    private List<String> suggestNicknameArguments(Profile sender, String label, String[] arguments) {
+        if (arguments.length == 1) {
+            List<String> suggestions = new ArrayList<>(profiles().suggestRegisteredUsernames(
+                    arguments[0], 0, MAX_COMMAND_SUGGESTIONS));
+            if (sender.meetsMinimumGroup(GroupType.MODERATOR)) {
+                suggestions.add("set");
+                suggestions.add("reset");
+            }
+            return suggestions;
+        }
+
+        if (arguments.length == 2 && sender.meetsMinimumGroup(GroupType.MODERATOR)
+                && (arguments[0].equalsIgnoreCase("set")
+                        || arguments[0].equalsIgnoreCase("reset"))) {
+            return profiles().suggestRegisteredUsernames(arguments[1], 0,
+                    MAX_COMMAND_SUGGESTIONS);
+        }
+
+        return List.of();
+    }
+
+    /** Suggests online welcome targets and staff-only management arguments. */
+    private List<String> suggestWelcomeArguments(Profile sender, String label, String[] arguments) {
+        if (arguments.length == 1) {
+            List<String> suggestions = new ArrayList<>(profiles().suggestOnlineUsernames(
+                    arguments[0], sender.getId(), MAX_COMMAND_SUGGESTIONS));
+            suggestions.add("help");
+
+            if (sender.meetsMinimumGroup(GroupType.MODERATOR)) {
+                suggestions.add("show");
+                suggestions.add("set");
+                suggestions.add("reset");
+            }
+            return suggestions;
+        }
+
+        if (arguments.length == 2 && sender.meetsMinimumGroup(GroupType.MODERATOR)
+                && (arguments[0].equalsIgnoreCase("show")
+                        || arguments[0].equalsIgnoreCase("set")
+                        || arguments[0].equalsIgnoreCase("reset"))) {
+            return profiles().suggestRegisteredUsernames(arguments[1], 0,
+                    MAX_COMMAND_SUGGESTIONS);
+        }
+
+        return List.of();
     }
 
     /**
@@ -622,7 +755,7 @@ public final class PlayersModule extends BaseModule {
      */
     private void sendRandomWelcome(Profile sender, Profile target) {
         if (sender.getId() == target.getId()) {
-            sender.sendMessage(getText("players.welcome.cannot_welcome_self"));
+            sender.sendMessage(getText("players.welcome.cannot_welcome_yourself"));
             return;
         }
 
