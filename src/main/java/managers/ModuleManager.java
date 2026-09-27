@@ -3,6 +3,7 @@ package managers;
 import database.Database;
 import main.Main;
 import modules.BaseModule;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -27,6 +28,9 @@ public class ModuleManager {
 
     @SuppressWarnings("unused")
     private final Database database;
+
+    /** One shared task drives minute hooks for every enabled module. */
+    private BukkitTask minuteTask;
 
     public ModuleManager(Database database) {
         this.database = database;
@@ -95,6 +99,41 @@ public class ModuleManager {
                         "[ModuleManager] Failed to enable module " + module.getModuleName()
                 );
                 e.printStackTrace();
+            }
+        }
+    }
+
+    /**
+     * Starts the shared minute pulse used by modules for periodic work.
+     * Calling this method repeatedly does not create duplicate tasks.
+     */
+    public void startScheduler() {
+        if (minuteTask != null) return;
+
+        minuteTask = Main.getInstance().getServer().getScheduler().runTaskTimer(
+                Main.getInstance(), this::notifyMinute, 1200L, 1200L);
+    }
+
+    /** Stops the shared minute pulse during plugin shutdown. */
+    public void stopScheduler() {
+        if (minuteTask == null) return;
+
+        minuteTask.cancel();
+        minuteTask = null;
+    }
+
+    /** Calls the minute hook only on modules that are currently running. */
+    private void notifyMinute() {
+        for (BaseModule module : modules.values()) {
+            if (!module.isEnabled()) continue;
+
+            try {
+                module.onMinute();
+            } catch (RuntimeException exception) {
+                Main.getInstance().getLogger().warning(
+                        "[ModuleManager] Minute task failed for "
+                                + module.getModuleName() + ": " + exception.getMessage());
+                exception.printStackTrace();
             }
         }
     }

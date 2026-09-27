@@ -19,7 +19,7 @@ import enums.Perm;
 import utils.LocationSerializer;
 
 /**
- * Centralized data access for all profile-related persistence.
+ * Centralized data access for core profile identity and social persistence.
  * <p>
  * This class encapsulates all SQL interaction for player-specific data:
  * <ul>
@@ -28,12 +28,10 @@ import utils.LocationSerializer;
  *     <li>Social lists (friends, trust, ignore)</li>
  *     <li>Settings</li>
  *     <li>Stats</li>
- *     <li>Timers / tickers</li>
- *     <li>Ban status</li>
  * </ul>
  *
- * All interaction with {@link DatabaseAccess} that concerns player state should go
- * through this class, rather than being duplicated across modules.
+ * Feature modules own their own tables and caches. Balances, timers and future
+ * module data therefore do not pass through this core storage class.
  */
 public final class ProfileStorage {
 
@@ -400,90 +398,6 @@ public final class ProfileStorage {
         } catch (SQLException exception) {
             logger.log(Level.SEVERE, "Failed to update welcome message for playerId="
                     + profile.getId() + ": " + exception.getMessage(), exception);
-            return false;
-        }
-    }
-
-    // ======================================================================
-    // Ban status & timers
-    // ======================================================================
-
-    /**
-     * Determines whether the given profile is currently banned.
-     * <p>
-     * This implementation checks:
-     * <ul>
-     *     <li>{@code players.banned} for a hard ban</li>
-     *     <li>{@code players_timers} with key {@code "tempban"} for a time-limited ban</li>
-     * </ul>
-     *
-     * @param profile profile to check
-     * @return {@code true} if the player is currently banned
-     */
-    public boolean isBanned(Profile profile) {
-        if (!ensureValidId(profile, "isBanned")) {
-            return false;
-        }
-        try {
-            Boolean hardBan = db.getBoolean(
-                    "players",
-                    "banned",
-                    "id = ?",
-                    List.of(profile.getId())
-            );
-            if (Boolean.TRUE.equals(hardBan)) {
-                return true;
-            }
-
-            return hasActiveTimer(profile, "tempban");
-        } catch (SQLException e) {
-            logger.severe("Failed to check ban status for playerId=" + profile.getId()
-                    + ": " + e.getMessage());
-            e.printStackTrace();
-            return false;
-        }
-    }
-
-    /**
-     * Checks whether a logical timer is currently active for the given profile.
-     *
-     * @param profile profile to check
-     * @param key     timer key (e.g. "fly", "tempban", "godmode")
-     * @return {@code true} if the timer is active, otherwise {@code false}
-     */
-    public boolean hasActiveTimer(Profile profile, String key) {
-        if (!ensureValidId(profile, "hasActiveTimer(" + key + ")")) {
-            return false;
-        }
-
-        try {
-            // Infinite timer
-            Boolean infinite = db.getBoolean(
-                    "players_timers",
-                    "infinite",
-                    "player_id = ? AND `key` = ?",
-                    List.of(profile.getId(), key)
-            );
-            if (Boolean.TRUE.equals(infinite)) {
-                return true;
-            }
-
-            // Check expiry
-            LocalDateTime expiresAt = db.getDateTime(
-                    "players_timers",
-                    "expires_at",
-                    "player_id = ? AND `key` = ?",
-                    List.of(profile.getId(), key)
-            );
-            if (expiresAt == null) {
-                return false;
-            }
-
-            return expiresAt.isAfter(LocalDateTime.now());
-        } catch (SQLException e) {
-            logger.severe("Failed to check timer '" + key + "' for playerId="
-                    + profile.getId() + ": " + e.getMessage());
-            e.printStackTrace();
             return false;
         }
     }
@@ -1206,6 +1120,83 @@ public final class ProfileStorage {
     }
 
     /**
+     * Finds registered Minecraft usernames beginning with a partial name.
+     *
+     * @param prefix partial username, or an empty string for the first entries
+     * @param excludedPlayerId player omitted from the result, or zero for none
+     * @param limit maximum number of returned names
+     * @return alphabetically ordered matching usernames
+     */
+    public List<String> searchRegisteredUsernames(String prefix, int excludedPlayerId, int limit) {
+        String condition = excludedPlayerId > 0 ? "id <> ?" : null;
+        List<?> parameters = excludedPlayerId > 0
+                ? List.of(excludedPlayerId)
+                : Collections.emptyList();
+        return searchUsernamePrefix(prefix, condition, parameters, limit,
+                "registered username suggestions");
+    }
+
+    /**
+     * Finds only players currently present on the supplied profile's explicit
+     * one-way trust list.
+     *
+     * @param profile owner of the trust list
+     * @param prefix partial username
+     * @param limit maximum number of returned names
+     * @return alphabetically ordered matching usernames
+     */
+    public List<String> searchTrustedUsernames(Profile profile, String prefix, int limit) {
+        if (!ensureValidId(profile, "searchTrustedUsernames")) return Collections.emptyList();
+
+        return searchUsernamePrefix(prefix,
+                "id IN (SELECT trusted_player_id FROM " + PLAYER_TRUST_TABLE
+                        + " WHERE trusting_player_id = ?)",
+                List.of(profile.getId()), limit, "trusted-player suggestions");
+    }
+
+    /**
+     * Finds accepted friends and either direction of a pending friend request.
+     * These are precisely the relationships {@code /unfriend} can remove.
+     *
+     * @param profile one side of the relationship
+     * @param prefix partial username
+     * @param limit maximum number of returned names
+     * @return alphabetically ordered matching usernames
+     */
+    public List<String> searchFriendConnectionUsernames(Profile profile, String prefix, int limit) {
+        if (!ensureValidId(profile, "searchFriendConnectionUsernames")) {
+            return Collections.emptyList();
+        }
+
+        String condition = "id IN (SELECT CASE WHEN first_player_id = ? "
+                + "THEN second_player_id ELSE first_player_id END FROM "
+                + PLAYER_FRIENDSHIP_TABLE
+                + " WHERE first_player_id = ? OR second_player_id = ?)";
+        List<Integer> parameters = List.of(profile.getId(), profile.getId(), profile.getId());
+        return searchUsernamePrefix(prefix, condition, parameters, limit,
+                "friend-connection suggestions");
+    }
+
+    /** Executes one safe, bounded username prefix lookup for command completion. */
+    private List<String> searchUsernamePrefix(String prefix, String condition,
+            List<?> parameters, int limit, String context) {
+        String enteredPrefix = prefix == null ? "" : prefix;
+        if (enteredPrefix.length() > 16) return Collections.emptyList();
+
+        String playerCondition = condition == null || condition.isBlank()
+                ? "id > 0"
+                : "id > 0 AND (" + condition + ")";
+
+        try {
+            return db.searchPrefix("players", "name", enteredPrefix,
+                    playerCondition, parameters, limit);
+        } catch (SQLException exception) {
+            logger.log(Level.WARNING, "Failed to load " + context + ".", exception);
+            return Collections.emptyList();
+        }
+    }
+
+    /**
      * Loads the stored, color-formatted nickname from
      * {@code player_profile_data.nickname_formatted}.
      *
@@ -1466,7 +1457,7 @@ public final class ProfileStorage {
             return false;
         }
 
-        profile.setGroup(newGroupType.getGroup());
+        profile.setAssignedGroup(newGroupType.getGroup());
         return true;
     }
 

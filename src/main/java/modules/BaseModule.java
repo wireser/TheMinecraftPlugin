@@ -355,6 +355,16 @@ public abstract class BaseModule {
     }
 
     /**
+     * Called once per minute by the central module scheduler while this module
+     * is enabled. Timestamp-based systems must still use the clock as their
+     * source of truth; this hook exists for cleanup, notifications and other
+     * work that should not wait for a player action.
+     */
+    public void onMinute() {
+        // Optional override
+    }
+
+    /**
      * Module-level /meta command entry point (if you bind a command to call this).
      * Return true if you handled the command.
      */
@@ -568,6 +578,18 @@ public abstract class BaseModule {
             return other;
         }
         return null;
+    }
+
+    /**
+     * Returns another module by its concrete type without a string lookup or
+     * an unsafe cast.
+     *
+     * @param moduleType expected module class
+     * @param <T> concrete module type
+     * @return matching module, or {@code null} when it is not registered
+     */
+    public <T extends BaseModule> T getModule(Class<T> moduleType) {
+        return plugin.getModuleManager().getModule(moduleType);
     }
 
     // =====================================================================

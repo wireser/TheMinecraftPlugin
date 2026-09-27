@@ -235,6 +235,66 @@ public final class CommandCentral {
 		
 	}
 
+    /**
+     * Produces tab-completion suggestions for one registered command.
+     *
+     * <p>Visibility, module state, command state and permission checks mirror
+     * normal execution. A command hidden from a player's group therefore does
+     * not leak its parameters through tab completion.</p>
+     *
+     * @param player profile requesting suggestions
+     * @param bukkitCommand Bukkit command being completed
+     * @param commandInput label or alias entered by the player
+     * @param arguments current command arguments
+     * @return filtered, alphabetically ordered suggestions
+     */
+    public List<String> complete(Profile player, Command bukkitCommand,
+            String commandInput, String[] arguments) {
+        if (player == null) return List.of();
+
+        String usedLabel = commandInput != null && !commandInput.isBlank()
+                ? commandInput
+                : bukkitCommand == null ? null : bukkitCommand.getName();
+        CommandRegistry command = getCommand(usedLabel).orElse(null);
+
+        if (command == null || !isCommandVisible(player, command)
+                || !isModuleEnabled(command.getModuleName()) || !command.isEnabled()
+                || (command.hasPermissionNode()
+                        && !player.hasPermission(command.getPermissionNode()))
+                || !command.hasTabHandler()) return List.of();
+
+        String[] safeArguments = arguments == null ? new String[0] : arguments;
+
+        try {
+            List<String> suggestions = command.getTabHandler()
+                    .complete(player, usedLabel, safeArguments);
+            return filterSuggestions(suggestions, safeArguments);
+        } catch (RuntimeException exception) {
+            instance.getLogger().log(Level.WARNING,
+                    "Failed to complete command '/" + usedLabel + "'.", exception);
+            return List.of();
+        }
+    }
+
+    /** Removes invalid, duplicate and non-matching completion candidates. */
+    private List<String> filterSuggestions(List<String> suggestions, String[] arguments) {
+        if (suggestions == null || suggestions.isEmpty()) return List.of();
+
+        String entered = arguments.length == 0
+                ? ""
+                : arguments[arguments.length - 1].toLowerCase(Locale.ROOT);
+        Map<String, String> uniqueSuggestions = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+
+        for (String suggestion : suggestions) {
+            if (suggestion == null || suggestion.isBlank()
+                    || !suggestion.toLowerCase(Locale.ROOT).startsWith(entered)) continue;
+
+            uniqueSuggestions.putIfAbsent(suggestion, suggestion);
+        }
+
+        return List.copyOf(uniqueSuggestions.values());
+    }
+
 	/**
 	 * Determines whether the player's group grants access to a command.
 	 *
