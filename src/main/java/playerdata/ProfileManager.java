@@ -11,7 +11,6 @@ import java.util.UUID;
 
 import org.bukkit.entity.Player;
 
-import enums.GroupType;
 import enums.Perm;
 import model.Group;
 import utils.Validator;

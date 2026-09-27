@@ -18,13 +18,17 @@ soft-depend: [PinataParty]
 commands:
   
   # Base
-  
+  list:
   
   # Social
   friend:
   unfriend:
   trust:
   untrust:
+  msg:
+  m:
+  reply:
+  r:
   
   # Moderation
   ban:

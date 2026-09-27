@@ -141,7 +141,7 @@ public final class CooldownManager {
      * @return a mutable map of command key -> last used timestamp for that player
      */
     private Map<String, Long> getCooldownMap(UUID playerId) {
-        return cooldowns.computeIfAbsent(playerId, k -> new HashMap<>());
+        return cooldowns.computeIfAbsent(playerId, _ -> new HashMap<>());
     }
     
 }
