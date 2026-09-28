@@ -16,8 +16,10 @@ import managers.ConfigManager;
 import managers.LanguageManager;
 import managers.ModuleManager;
 import managers.YamlLanguageManager;
+import menu.MenuManager;
 import modules.EconomyModule;
 import modules.LocationsModule;
+import modules.MenusModule;
 import modules.PlayersModule;
 import modules.TimersModule;
 import playerdata.Profile;
@@ -48,6 +50,9 @@ public class Main extends JavaPlugin
 
 	/** Handles enabling, disabling and monitoring of plugin modules. */
 	private ModuleManager moduleManager;
+
+	/** Creates per-viewer inventory menu sessions for modules. */
+	private MenuManager menuManager;
 
 	private LanguageManager languageManager;
 
@@ -91,6 +96,7 @@ public class Main extends JavaPlugin
         languageManager = new YamlLanguageManager(this);
 
 		commandCentral = new CommandCentral(this, database, languageManager);
+		menuManager = new MenuManager(this);
 
 		moduleManager = new ModuleManager(database);
 
@@ -99,6 +105,7 @@ public class Main extends JavaPlugin
 		moduleManager.registerModule(new PlayersModule());
 		moduleManager.registerModule(new LocationsModule());
 		moduleManager.registerModule(new EconomyModule());
+		moduleManager.registerModule(new MenusModule());
 
         // Load + enable in dependency order
 		registerModules();
@@ -122,6 +129,21 @@ public class Main extends JavaPlugin
 
 		getServer().getPluginManager().registerEvents(
 		        new listeners.player.PlayerRespawn(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.inventory.InventoryClick(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.inventory.InventoryDrag(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.inventory.InventoryClose(),
 		        this
 		);
 
@@ -248,6 +270,11 @@ public class Main extends JavaPlugin
 	 */
 	public ModuleManager getModuleManager() {
 		return moduleManager;
+	}
+
+	/** @return shared factory for plugin-owned inventory menus */
+	public MenuManager getMenuManager() {
+		return menuManager;
 	}
 
 	/**

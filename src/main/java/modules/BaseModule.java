@@ -5,6 +5,7 @@ import command.CommandRegistry;
 import main.Main;
 import managers.ConfigManager;
 import managers.LanguageManager;
+import menu.MenuManager;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Server;
 import org.bukkit.World;
@@ -532,6 +533,29 @@ public abstract class BaseModule {
      */
     public Component getText(String key, Object... arguments) {
         return lang.line(key, arguments);
+    }
+
+    /**
+     * Returns a bounded language list rendered as Adventure components.
+     * The complete language snapshot is already held in RAM.
+     */
+    public List<Component> getTextList(String key, int maximumItems, String defaultItem,
+            Object... arguments) {
+        List<Component> renderedLines = new ArrayList<>();
+
+        for (String template : lang.list(key, maximumItems, defaultItem)) {
+            renderedLines.add(lang.render(template, arguments));
+        }
+
+        return List.copyOf(renderedLines);
+    }
+
+    /**
+     * Returns the shared menu factory used to create per-viewer sessions.
+     * Layouts and button behaviour remain inside the module calling it.
+     */
+    protected final MenuManager menus() {
+        return plugin.getMenuManager();
     }
 
     // --- Console / server / world / logger ---
