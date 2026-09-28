@@ -47,6 +47,74 @@ locations:
   last:
     restored: "<gray>The world remembers where you left it."
 
+menus:
+  main:
+    title: "<dark_purple><bold>GoldenLeaf <gray>| <light_purple>Main Menu"
+    unavailable: "<yellow>>> The path to %1 <yellow>is not open yet. Its doors will appear when that system is ready."
+    warps:
+      name: "<light_purple><bold>Warps & Waystones"
+      lore:
+        - "<gray>Cross the world without wearing your boots to dust."
+        - "<gray>Visit server landmarks and player-built destinations."
+        - "<dark_gray>Command: <white>/warp"
+        - "<yellow>Click to browse the roads."
+    tutorials:
+      name: "<gold><bold>Guides & Tutorials"
+      lore:
+        - "<gray>The world is large; nobody expects you to memorize it."
+        - "<gray>Read guides, mechanics and the laws of the land."
+        - "<dark_gray>Commands: <white>/tutorials <dark_gray>or <white>/help"
+        - "<yellow>Click to open the library."
+    shop:
+      name: "<green><bold>Server Shop"
+      lore:
+        - "<gray>Browse useful goods, rare stock and honest commerce."
+        - "<gray>Your coin purse may object to the experience."
+        - "<dark_gray>Command: <white>/shop"
+        - "<yellow>Click to visit the counter."
+    auctions:
+      name: "<aqua><bold>Player Auctions"
+      lore:
+        - "<gray>Browse treasures offered by other travelers."
+        - "<gray>One person's clutter is another person's suspicious bargain."
+        - "<dark_gray>Commands: <white>/auction <dark_gray>or <white>/ah"
+        - "<yellow>Click to inspect the market."
+    settings:
+      name: "<yellow><bold>Your Settings"
+      lore:
+        - "<gray>Choose how chat, requests and server systems treat you."
+        - "<gray>These choices follow your account between visits."
+        - "<dark_gray>Command: <white>/settings"
+        - "<yellow>Click to adjust your experience."
+    achievements:
+      name: "<aqua><bold>Achievements"
+      lore:
+        - "<gray>See the deeds, disasters and milestones remembered here."
+        - "<gray>Some are glorious. Some merely prove you survived."
+        - "<dark_gray>Commands: <white>/achievements <dark_gray>or <white>/ac"
+        - "<yellow>Click to open your chronicle."
+    friends:
+      name: "<green><bold>Friends & Trust"
+      lore:
+        - "<gray>Manage companions, requests and trusted builders."
+        - "<gray>Choose carefully; friends can reach the diamond chest."
+        - "<dark_gray>Command: <white>/friend"
+        - "<yellow>Click to view your circle."
+    tickets:
+      name: "<red><bold>Ask for Help"
+      lore:
+        - "<gray>Something broken, confusing or actively on fire?"
+        - "<gray>Put it in writing so the staff can investigate."
+        - "<dark_gray>Command: <white>/ticket"
+        - "<yellow>Click to open a ticket."
+    voting:
+      name: "<light_purple><bold>Support GoldenLeaf"
+      lore:
+        - "<gray>Help new travelers find the server."
+        - "<gray>The realm notices your support and rewards it."
+        - "<dark_gray>Command: <white>/vote"
+        - "<yellow>Click to view the voting sites."
+
 empty:
   greeting: "<yellow>>> The example module is awake."
   greeting_named: "<yellow>>> Hello, <white>%1<yellow>. The example module is awake."

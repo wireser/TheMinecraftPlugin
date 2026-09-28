@@ -19,6 +19,7 @@ commands:
   
   # Base
   list:
+  menu:
   
   # Social
   friend:
