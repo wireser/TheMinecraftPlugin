@@ -211,7 +211,7 @@ public final class TimersModule extends BaseModule {
         }
 
         if (profile.isCachedOnlineProfile() && cachedTimers == null) {
-            onlineTimers.computeIfAbsent(profile.getId(), _ /* ignored */ -> new ConcurrentHashMap<>())
+            onlineTimers.computeIfAbsent(profile.getId(), ignored -> new ConcurrentHashMap<>())
                     .put(normalizedKey, timer);
         }
 
@@ -578,7 +578,7 @@ public final class TimersModule extends BaseModule {
     private void cacheTimer(Profile profile, PlayerTimer timer) {
         if (!profile.isCachedOnlineProfile()) return;
 
-        onlineTimers.computeIfAbsent(profile.getId(), _ /* ignored */ -> new ConcurrentHashMap<>())
+        onlineTimers.computeIfAbsent(profile.getId(), ignored -> new ConcurrentHashMap<>())
                 .put(timer.key(), timer);
     }
 

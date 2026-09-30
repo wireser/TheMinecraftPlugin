@@ -1,16 +1,24 @@
 package listeners.player;
 
+import main.Main;
+import modules.ModerationModule;
+import playerdata.Profile;
+
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerInteractEvent;
 
-public class PlayerInteract implements Listener {
+/** Routes world interaction restrictions through the central listener layer. */
+public final class PlayerInteract implements Listener {
 
-	@EventHandler(priority = EventPriority.LOW)
-	public static void Main(PlayerInteractEvent event)
-	{
-		
-	}
-	
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
+    public void onPlayerInteract(PlayerInteractEvent event) {
+        Main plugin = Main.getInstance();
+        Profile profile = plugin.getProfileManager().resolveOnline(event.getPlayer());
+        ModerationModule moderation = plugin.getModuleManager().getModule(ModerationModule.class);
+
+        if (moderation != null && moderation.isEnabled()
+                && moderation.shouldCancelWorldInteraction(profile)) event.setCancelled(true);
+    }
 }

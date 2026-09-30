@@ -10,6 +10,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.config.Configurator;
 import command.CommandCentral;
+import command.CoreModerationCommands;
 import database.Database;
 import database.DatabaseAccess;
 import managers.ConfigManager;
@@ -20,6 +21,7 @@ import menu.MenuManager;
 import modules.EconomyModule;
 import modules.LocationsModule;
 import modules.MenusModule;
+import modules.ModerationModule;
 import modules.PlayersModule;
 import modules.TimersModule;
 import playerdata.Profile;
@@ -44,6 +46,9 @@ public class Main extends JavaPlugin
 
 	/** Central command handler used to route commands to subsystems. */
 	private CommandCentral commandCentral;
+
+	/** Permanent-ban commands that must remain independent from modules. */
+	private CoreModerationCommands coreModerationCommands;
 
 	/** Handles all player profile storage and lifecycle. */
 	private ProfileManager profileManager;
@@ -97,11 +102,15 @@ public class Main extends JavaPlugin
 
 		commandCentral = new CommandCentral(this, database, languageManager);
 		menuManager = new MenuManager(this);
+		coreModerationCommands = new CoreModerationCommands(this);
+		coreModerationCommands.registerCommands();
+		coreModerationCommands.synchronizePermanentBans();
 
 		moduleManager = new ModuleManager(database);
 
         // Register modules here
 		moduleManager.registerModule(new TimersModule());
+		moduleManager.registerModule(new ModerationModule());
 		moduleManager.registerModule(new PlayersModule());
 		moduleManager.registerModule(new LocationsModule());
 		moduleManager.registerModule(new EconomyModule());
@@ -111,6 +120,11 @@ public class Main extends JavaPlugin
 		registerModules();
 		moduleManager.bootstrapModules();
 		moduleManager.startScheduler();
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.player.PlayerAsyncPreLogin(),
+		        this
+		);
 
 		getServer().getPluginManager().registerEvents(
 		        new listeners.player.PlayerJoin(),
@@ -147,6 +161,51 @@ public class Main extends JavaPlugin
 		        this
 		);
 
+		getServer().getPluginManager().registerEvents(
+		        new listeners.player.PlayerAsyncChat(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.player.PlayerCommandSend(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.block.BlockBreak(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.block.BlockPlace(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.player.PlayerInteract(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.player.PlayerInteractAtEntity(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.player.PlayerDropItem(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.entity.EntityPickupItem(),
+		        this
+		);
+
+		getServer().getPluginManager().registerEvents(
+		        new listeners.entity.EntityDamageByEntity(),
+		        this
+		);
+
 	}
 
 	/**
@@ -162,6 +221,10 @@ public class Main extends JavaPlugin
             moduleManager.disableAll();
             moduleManager.shutdownAll();
         }
+
+		if (coreModerationCommands != null) {
+			coreModerationCommands.unregisterCommands();
+		}
 
 		if (profileManager != null) {
 			profileManager.clear();

@@ -37,6 +37,184 @@ timers:
   indefinite_change_rejected: "<red><white>%1<red>'s <white>%2 <red>timer is indefinite. Set or reset it instead."
   database_error: "<red>The timer change could not be saved. Nothing was changed; check the console."
 
+core:
+  ban:
+    summary: "Permanently ban a registered player."
+    syntax: "/ban <player> [reason...]"
+    default_reason: "No reason was provided."
+    invalid_reason: "<red>The reason must contain 1-%1 characters on one line."
+    player_not_found: "<red>No registered player was found with the username <white>%1<red>."
+    cannot_target_self: "<red>You cannot permanently ban yourself."
+    cannot_target_group: "<red>You cannot permanently ban <white>%1<red> because their group is not below yours."
+    already_banned: "<yellow>>> <white>%1 <yellow>is already permanently banned."
+    completed: "<yellow>>> Permanently banned <white>%1<yellow>."
+    disconnect: "<red>You are permanently banned from this server.\n<gray>Reason: <white>%1"
+    database_error: "<red>The permanent-ban state could not be changed. Check the console."
+    prius_failed: "<red>The ban changed, but its PRIUS entry could not be saved. Check the console."
+  unban:
+    summary: "Remove a permanent player ban."
+    syntax: "/unban <player> [reason...]"
+    default_reason: "Administrative review."
+    not_banned: "<yellow>>> <white>%1 <yellow>is not permanently banned."
+    completed: "<yellow>>> Removed the permanent ban from <white>%1<yellow>."
+
+moderation:
+  database_error: "<red>The moderation change could not be saved. Check the console."
+  player_not_found: "<red>No registered player was found with the username <white>%1<red>."
+  player_offline: "<red><white>%1 <red>must be online for that action."
+  cannot_target_self: "<red>You cannot use this punishment on yourself."
+  cannot_target_group: "<red>You cannot act on <white>%1<red> because their group is not below yours."
+  reason_invalid: "<red>The reason must contain 1-%1 characters on one line."
+
+  help:
+    header: "<yellow>>> Moderation commands:"
+    list_entry: "<gray> • <white>%1 <dark_gray>— <gray>%2"
+    footer: "<yellow>>> Use <white>/modhelp <command><yellow>, <white>/modhelp topic <topic><yellow>, or <white>/modhelp gui<yellow> for more."
+    detail: "<yellow>>> <white>%1\n<gray>%2\n<dark_gray>%3"
+    unknown: "<red>No moderation command named <white>%1 <red>is registered in this help."
+    topic_usage: "<yellow>>> Use <white>/modhelp topic <topic><yellow>. Topics: <white>%1<yellow>."
+    menu_title: "<dark_red><bold>Moderation Help"
+    menu_name: "<yellow><bold>%1"
+    menu_lore: "<gray>%1"
+    topic:
+      punishments: "<yellow>>> Timed punishments use <white>set<yellow>, <white>add<yellow>, <white>sub <yellow>and <white>off<yellow>. A bare time adds time. Natural expiry does not create a second PRIUS entry. Use <white>/ban <yellow>only for permanent bans."
+      prius: "<yellow>>> PRIUS is a player's permanent staff record. Add only information another moderator may need later: notes, warnings and meaningful staff actions. It is not a server activity log."
+      privacy: "<yellow>>> Inventory and player information tools are for active staff work. Do not browse private player data out of curiosity, and write a PRIUS note when context would otherwise be lost."
+    commands:
+      modhelp:
+        syntax: "/modhelp [command|topic <topic>|gui]"
+        summary: "Show moderation commands and topics."
+        detail: "Lists available tools, explains one command, opens a topic, or opens the help menu."
+      player:
+        syntax: "/player <player>"
+        summary: "Open the player's staff sheet."
+        detail: "Shows identity, groups, activity, bans, active timers and PRIUS count."
+      prius:
+        syntax: "/prius <player> [page]"
+        summary: "Read the player's PRIUS record."
+        detail: "Shows permanent staff notes, warnings and meaningful punishments newest first."
+      note:
+        syntax: "/note <player> <text...>"
+        summary: "Add a staff-only PRIUS note."
+        detail: "Notes are permanent and are not shown to the target."
+      warn:
+        syntax: "/warn <player> [reason...]"
+        summary: "Warn an online player and record it."
+        detail: "The target sees the warning immediately and the warning remains in PRIUS."
+      kick:
+        syntax: "/kick <player> <reason...>"
+        summary: "Disconnect an online player."
+        detail: "The kick and its reason are recorded in PRIUS."
+      mute:
+        syntax: "/mute <player> [time|set|add|sub|off] [time] [reason...]"
+        summary: "Manage a chat mute."
+        detail: "Operations are set, add, sub and off. A bare time adds time."
+      jail:
+        syntax: "/jail <player> [time|set|add|sub|off] [time] [reason...]"
+        summary: "Manage a player's jail timer."
+        detail: "The future jail location and containment system will consume this generic timer."
+      buildoff:
+        syntax: "/buildoff <player> [time|set|add|sub|off] [time] [reason...]"
+        summary: "Apply or edit Marked status."
+        detail: "Marked players keep their assigned rank but temporarily receive punished access."
+      tempban:
+        syntax: "/tempban <player> [time|set|add|sub|off] [time] [reason...]"
+        summary: "Manage a temporary ban."
+        detail: "Tempbans require an expiry; permanent bans use /ban."
+      ban:
+        syntax: "/ban <player> [reason...]"
+        summary: "Permanently ban a registered player."
+        detail: "Core stores the state in players and mirrors it into Paper's profile ban list."
+      unban:
+        syntax: "/unban <player> [reason...]"
+        summary: "Remove a permanent player ban."
+        detail: "Core clears both the database state and Paper's profile ban entry."
+      inv:
+        syntax: "/inv <player> [inventory|ender]"
+        summary: "Open an editable online inventory."
+        detail: "Changes are live. This command is deliberately not read-only."
+      hide:
+        syntax: "/hide"
+        summary: "Toggle vanish and spectator mode."
+        detail: "Running it again restores visibility and the game mode you had before hiding."
+      cc:
+        syntax: "/cc"
+        summary: "Clear visible player chat immediately."
+        detail: "Use it when sensitive or harmful text must be hidden without waiting on a cooldown."
+      clear:
+        syntax: "/clear <player>"
+        summary: "Clear an online player's inventory."
+        detail: "The target is mandatory, including when clearing your own inventory."
+
+  player:
+    online: "online"
+    offline: "offline"
+    affirmative: "yes"
+    negative: "no"
+    none: "none"
+    sheet: "<yellow>>> Staff sheet for <white>%1\n<gray>ID: <white>%2 <dark_gray>| <gray>UUID: <white>%3\n<gray>Assigned group: <white>%4 <dark_gray>| <gray>Effective group: <white>%5\n<gray>Status: <white>%6 <dark_gray>| <gray>First login: <white>%7 <dark_gray>| <gray>Last login: <white>%8\n<gray>Active punishments: <white>%9 <dark_gray>| <gray>Permanent ban: <white>%10 <dark_gray>| <gray>PRIUS entries: <white>%11"
+
+  prius:
+    header: "<yellow>>> PRIUS record for <white>%1 <yellow>— page <white>%2<yellow>/<white>%3 <yellow>(<white>%4 <yellow>entries)"
+    entry: "<dark_gray>%1 <gray>[<white>%2<gray>/<white>%3<gray>] <white>%4<gray>: %5"
+    empty: "<gray>No PRIUS entries have been recorded for this player."
+    invalid_page: "<red>The PRIUS page must be a positive whole number."
+    page_missing: "<red>PRIUS page <white>%1 <red>does not exist. The last page is <white>%2<red>."
+    save_failed: "<red>The action succeeded, but its PRIUS entry could not be saved. Check the console."
+
+  note:
+    saved: "<yellow>>> Staff note saved to <white>%1<yellow>'s PRIUS record."
+
+  warn:
+    default_reason: "A staff member has warned you about your current behavior."
+    sent: "<yellow>>> Warning sent to <white>%1 <yellow>and recorded in PRIUS."
+    received: "<red>You have been warned by %1.\n<gray>Reason: <white>%2"
+
+  kick:
+    disconnect: "<red>You were disconnected by staff.\n<gray>Reason: <white>%1"
+    completed: "<yellow>>> Disconnected <white>%1 <yellow>and recorded the action in PRIUS."
+
+  inventory:
+    opened: "<yellow>>> Opened <white>%1<yellow>'s editable <white>%2<yellow>."
+
+  hide:
+    hidden: "<yellow>>> You are hidden from players and now observing in spectator mode."
+    visible: "<yellow>>> You are visible again and your previous game mode has been restored."
+
+  chat_cleared: "<yellow>>> Chat was cleared by <white>%1<yellow>."
+
+  clear:
+    completed: "<yellow>>> Cleared <white>%1<yellow>'s inventory."
+    received: "<red>Your inventory was cleared by %1."
+
+  mute:
+    chat_blocked: "<red>You are muted and cannot speak in public chat."
+
+  buildoff:
+    interaction_blocked: "<dark_purple>You are Marked and cannot modify or interact with the world."
+
+  tempban:
+    login_indefinite: "<red>You are temporarily banned.\n<gray>No expiry is available; contact staff because tempbans should be finite."
+    login_timed: "<red>You are temporarily banned.\n<gray>Expires: <white>%1 <gray>(<white>%2 <gray>remaining)"
+
+  punishment:
+    usage: "<yellow>>> Use <white>/%1 <player><yellow> to inspect; <white>/%1 <player> <time><yellow> to add time; <white>/%1 <player> <set|add|sub> <time> [reason...]<yellow>; or <white>/%1 <player> off [reason...]<yellow>."
+    no_reason: "No reason was provided."
+    invalid_duration: "<red><white>%1 <red>is not a valid duration. Combine <white>s, m, h, d, w <red>without spaces, for example <white>1h30m<red>."
+    unknown_action: "<red>Unknown punishment operation: <white>%1<red>."
+    infinite_not_allowed: "<red><white>%1 <red>cannot use that indefinite operation."
+    indefinite_change_rejected: "<red><white>%1<red>'s <white>%2 <red>is indefinite. Use <white>set <red>or <white>off <red>instead."
+    inactive: "<yellow>>> <white>%1 <yellow>does not have an active <white>%2<yellow>."
+    active_indefinite: "<yellow>>> <white>%1<yellow>'s <white>%2 <yellow>is active indefinitely."
+    active_timed: "<yellow>>> <white>%1<yellow>'s <white>%2 <yellow>expires at <white>%3 <yellow>(<white>%4 <yellow>remaining)."
+    set_indefinite: "<yellow>>> Set <white>%1<yellow>'s <white>%2 <yellow>to indefinite."
+    changed: "<yellow>>> Updated <white>%1<yellow>'s <white>%2<yellow>: <white>%3 %4<yellow>. New expiry: <white>%5<yellow>."
+    ended: "<yellow>>> <white>%1<yellow>'s <white>%2 <yellow>reached zero and was removed."
+    removed: "<yellow>>> Removed <white>%1<yellow>'s <white>%2<yellow>."
+    applied_target: "<red>%1 applied for %2 by %3.\n<gray>Reason: <white>%4"
+    removed_target: "<yellow>>> Your <white>%1 <yellow>was removed by <white>%2<yellow>. Reason: <white>%3"
+    expired: "<yellow>>> Your <white>%1 <yellow>has expired."
+
 locations:
   spawn:
     unavailable: "<dark_purple>The road to spawn has gone quiet. Its anchor may be missing."
