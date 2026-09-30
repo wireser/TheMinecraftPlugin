@@ -32,17 +32,23 @@ commands:
   r:
   
   # Moderation
+  modhelp:
+  player:
+  prius:
+  note:
+  warn:
+  kick:
+  mute:
+  jail:
+  buildoff:
+  tempban:
+  inv:
+  hide:
+  cc:
+    aliases: [clearchat]
+  clear:
   ban:
   unban:
-  mute:
-  unmute:
-  jail:
-  free:
-  kick:
-  kickall:
-  punish:
-  warn:
-  prius:
   welcome:
   nick:
   ticker:

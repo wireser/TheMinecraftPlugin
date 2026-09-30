@@ -104,6 +104,16 @@ public final class PlayerJoin implements Listener {
                 + player.getName()
                 + ": playerId="
                 + profile.getId()
+                + ", assignedGroup="
+                + profile.getAssignedGroup().getDisplayName()
+                + " ("
+                + profile.getAssignedGroup().getDatabaseId()
+                + "), effectiveGroup="
+                + profile.getEffectiveGroup().getDisplayName()
+                + " ("
+                + profile.getEffectiveGroup().getDatabaseId()
+                + "), groupOverride="
+                + profile.hasEffectiveGroupOverride()
         );
     }
 

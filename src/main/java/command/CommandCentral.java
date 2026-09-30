@@ -295,29 +295,48 @@ public final class CommandCentral {
         return List.copyOf(uniqueSuggestions.values());
     }
 
+    /**
+     * Checks whether a registered plugin command may be exposed to a player.
+     * Unknown labels belong to Bukkit or another plugin and are left alone.
+     *
+     * @param player profile receiving a command tree
+     * @param commandLabel root label without a slash
+     * @return {@code true} when the label should remain discoverable
+     */
+    public boolean canDiscover(Profile player, String commandLabel) {
+        if (player == null || commandLabel == null) return false;
+
+        CommandRegistry command = getCommand(commandLabel).orElse(null);
+        int namespaceSeparator = commandLabel.indexOf(':');
+        if (command == null && namespaceSeparator > 0
+                && commandLabel.substring(0, namespaceSeparator)
+                        .equalsIgnoreCase(instance.getName())) {
+            command = getCommand(commandLabel.substring(namespaceSeparator + 1)).orElse(null);
+        }
+        if (command == null) return true;
+
+        return isCommandVisible(player, command)
+                && isModuleEnabled(command.getModuleName())
+                && command.isEnabled()
+                && (!command.hasPermissionNode()
+                        || player.hasPermission(command.getPermissionNode()));
+    }
+
 	/**
-	 * Determines whether the player's group grants access to a command.
+	 * Determines whether the player's effective group reaches the command's
+	 * declared minimum group.
 	 *
-	 * <p>The {@link Group} object resolves inherited command access through
-	 * its parent hierarchy.</p>
+	 * <p>{@link CommandRegistry#getMinimumGroup()} is the authoritative access
+	 * rule. Group command maps remain useful for listing inherited commands, but
+	 * command execution must not depend on a second mutable copy of that rule.</p>
 	 *
 	 * @param player player attempting to discover or execute the command
 	 * @param command command being checked
-	 * @return {@code true} when the player's group grants command access
+	 * @return {@code true} when the effective group meets the minimum group
 	 */
-	private boolean isCommandVisible(
-	    Profile player,
-	    CommandRegistry command
-	) {
-	    Group playerGroup = player.getGroup();
-
-	    if (playerGroup == null) {
-	        return false;
-	    }
-
-	    return playerGroup.canUseCommand(
-	        command.getLabel()
-	    );
+	private boolean isCommandVisible(Profile player, CommandRegistry command) {
+		return player != null && command != null
+				&& player.meetsMinimumGroup(command.getMinimumGroup());
 	}
 
 	/**
@@ -327,8 +346,9 @@ public final class CommandCentral {
 	 * @return true if the module is enabled, false otherwise
 	 */
 	private boolean isModuleEnabled(String moduleName) {
-		if (moduleName == null || moduleName.isEmpty()) {
-			// No module -> treat as always enabled
+		if (moduleName == null || moduleName.isEmpty()
+				|| moduleName.equalsIgnoreCase("global")) {
+			// Core commands do not belong to a toggleable module.
 			return true;
 		}
 		return instance.getModuleManager().isModuleEnabled(moduleName);
