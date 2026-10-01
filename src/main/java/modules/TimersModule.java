@@ -13,7 +13,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -43,7 +42,9 @@ public final class TimersModule extends BaseModule {
     private static final String TIMER_TABLE = "player_timers";
     private static final int MAX_COMMAND_SUGGESTIONS = 20;
     private static final Pattern TIMER_KEY = Pattern.compile("[a-z][a-z0-9._-]{0,63}");
-    private static final Pattern DURATION_PART = Pattern.compile("(\\d+)([smhdw])");
+    private static final Pattern DURATION_PART = Pattern.compile(
+            "(\\d+)(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w)");
+    private static final Pattern SECOND_UNIT = Pattern.compile("\\d+(?:seconds?|secs?|s)");
     private static final DateTimeFormatter ADMIN_DATE_TIME =
             DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss");
     private static final List<String> TIMER_COLUMNS =
@@ -615,13 +616,17 @@ public final class TimersModule extends BaseModule {
         return TIMER_KEY.matcher(normalized).matches() ? normalized : null;
     }
 
-    /** Parses combinations such as {@code 16d20h}, {@code 1h30m} or {@code 45s}. */
+    /**
+     * Parses compact or readable combinations such as {@code 16d20h},
+     * {@code 1hour30minutes}, or {@code 45seconds}. Spaces are intentionally not
+     * accepted so a duration always occupies one command argument.
+     */
     public static Optional<Duration> parseDuration(String input) {
         if (input == null || input.isBlank()) return Optional.empty();
 
         String normalized = input.toLowerCase(Locale.ROOT);
         Matcher matcher = DURATION_PART.matcher(normalized);
-        Set<Character> usedUnits = new HashSet<>();
+        Set<Character> usedUnits = new java.util.HashSet<>();
         long totalSeconds = 0;
         int position = 0;
 
@@ -630,7 +635,7 @@ public final class TimersModule extends BaseModule {
                 if (matcher.start() != position) return Optional.empty();
 
                 long amount = Long.parseLong(matcher.group(1));
-                char unit = matcher.group(2).charAt(0);
+                char unit = canonicalDurationUnit(matcher.group(2));
                 if (!usedUnits.add(unit)) return Optional.empty();
 
                 long unitSeconds = switch (unit) {
@@ -652,6 +657,20 @@ public final class TimersModule extends BaseModule {
         return position == normalized.length() && totalSeconds > 0
                 ? Optional.of(Duration.ofSeconds(totalSeconds))
                 : Optional.empty();
+    }
+
+    /** Returns whether a duration expression explicitly contains a seconds unit. */
+    public static boolean containsSecondsUnit(String input) {
+        return input != null && SECOND_UNIT.matcher(input.toLowerCase(Locale.ROOT)).find();
+    }
+
+    private static char canonicalDurationUnit(String unit) {
+        if (unit.startsWith("s")) return 's';
+        if (unit.startsWith("m")) return 'm';
+        if (unit.startsWith("h")) return 'h';
+        if (unit.startsWith("d")) return 'd';
+        if (unit.startsWith("w")) return 'w';
+        throw new IllegalArgumentException("Unsupported duration unit: " + unit);
     }
 
     /** Formats a duration with the same week/day/hour/minute/second units accepted by commands. */

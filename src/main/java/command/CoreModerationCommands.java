@@ -1,5 +1,9 @@
 package command;
 
+import static utils.CommandUtils.joinArguments;
+import static utils.DatabaseValueConverter.asInt;
+import static utils.TextComponentParser.escapeMiniMessage;
+
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
@@ -73,7 +77,7 @@ public final class CoreModerationCommands {
     public void synchronizePermanentBans() {
         try {
             List<Map<String, Object>> bannedPlayers = plugin.db().getRows("players",
-                    List.of("uuid"), "flag_banned = ?", List.of(true));
+                    List.of("id", "uuid"), "flag_banned = ?", List.of(true));
 
             for (Map<String, Object> row : bannedPlayers) {
                 Object rawUuid = row.get("uuid");
@@ -83,7 +87,7 @@ public final class CoreModerationCommands {
                     OfflinePlayer player = plugin.getServer().getOfflinePlayer(
                             UUID.fromString(rawUuid.toString()));
                     if (!player.isBanned()) {
-                        player.ban(language.plain("core.ban.default_reason"),
+                        player.ban(findPermanentBanReason(asInt(row.get("id"))),
                                 (Duration) null, plugin.getName());
                     }
                 } catch (IllegalArgumentException exception) {
@@ -132,14 +136,14 @@ public final class CoreModerationCommands {
 
             OfflinePlayer paperPlayer = plugin.getServer().getOfflinePlayer(target.getUuid());
             try {
-                paperPlayer.ban(reason, (Duration) null, sender.getIgn());
+                paperPlayer.ban(reason, (Duration) null, plugin.getName());
             } catch (RuntimeException exception) {
                 plugin.db().update("players", List.of("flag_banned"), List.of(false),
                         "id = ?", target.getId());
                 throw exception;
             }
 
-            recordPrius(target, sender, "ban", "Permanent ban | reason: " + reason);
+            recordPrius(target, sender, "ban", "set", reason);
             if (target.isOnline()) {
                 target.getPlayer().kick(language.line("core.ban.disconnect",
                         escapeMiniMessage(reason)));
@@ -197,7 +201,7 @@ public final class CoreModerationCommands {
                 throw exception;
             }
 
-            recordPrius(target, sender, "unban", "Permanent ban removed | reason: " + reason);
+            recordPrius(target, sender, "ban", "off", reason);
             sender.sendMessage(language.line("core.unban.completed", target.getIgn()));
         } catch (SQLException | RuntimeException exception) {
             plugin.getLogger().log(Level.SEVERE,
@@ -209,6 +213,26 @@ public final class CoreModerationCommands {
     private boolean isPermanentlyBanned(Profile target) throws SQLException {
         return Boolean.TRUE.equals(plugin.db().getBoolean("players", "flag_banned",
                 "id = ?", List.of(target.getId())));
+    }
+
+    /** Recovers the latest permanent-ban reason when rebuilding Paper's ban list. */
+    private String findPermanentBanReason(int playerId) {
+        try {
+            return plugin.db().getRows(PRIUS_TABLE,
+                    List.of("id", "entry_action", "entry_text"),
+                    "player_id = ? AND entry_class = ? AND entry_type = ?",
+                    List.of(playerId, "punishment", "ban")).stream()
+                    .max(java.util.Comparator.comparingInt(row -> asInt(row.get("id"))))
+                    .filter(row -> "set".equalsIgnoreCase(String.valueOf(row.get("entry_action"))))
+                    .map(row -> String.valueOf(row.get("entry_text")))
+                    .filter(reason -> !reason.isBlank())
+                    .orElse(language.plain("core.ban.default_reason"));
+        } catch (SQLException exception) {
+            plugin.getLogger().log(Level.WARNING,
+                    "Could not recover PRIUS reason for permanent ban playerId=" + playerId + ".",
+                    exception);
+            return language.plain("core.ban.default_reason");
+        }
     }
 
     private Profile requirePunishableTarget(Profile sender, String username) {
@@ -233,11 +257,14 @@ public final class CoreModerationCommands {
         return target;
     }
 
-    private void recordPrius(Profile target, Profile staff, String entryType, String text) {
+    private void recordPrius(Profile target, Profile staff, String entryType,
+            String entryAction, String text) {
         try {
             plugin.db().insert(PRIUS_TABLE,
-                    List.of("player_id", "staff_id", "entry_class", "entry_type", "entry_text"),
-                    List.of(target.getId(), staff.getId(), "punishment", entryType, text));
+                    List.of("player_id", "staff_id", "entry_class", "entry_type",
+                            "entry_action", "notified_at", "entry_text"),
+                    java.util.Arrays.asList(target.getId(), staff.getId(), "punishment", entryType,
+                            entryAction, null, text));
         } catch (SQLException exception) {
             plugin.getLogger().log(Level.SEVERE,
                     "Permanent ban changed, but its PRIUS entry could not be saved for playerId="
@@ -252,16 +279,9 @@ public final class CoreModerationCommands {
                 MAX_COMMAND_SUGGESTIONS);
     }
 
-    private static String joinArguments(String[] arguments, int firstIndex) {
-        return String.join(" ", List.of(arguments).subList(firstIndex, arguments.length)).trim();
-    }
-
     private static boolean isValidReason(String reason) {
         return reason != null && !reason.isBlank() && reason.length() <= MAX_REASON_LENGTH
                 && reason.indexOf('\n') < 0 && reason.indexOf('\r') < 0;
     }
 
-    private static String escapeMiniMessage(String value) {
-        return value == null ? "" : value.replace("\\", "\\\\").replace("<", "\\<");
-    }
 }
