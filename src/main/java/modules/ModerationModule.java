@@ -1,7 +1,12 @@
 package modules;
 
+import static utils.CommandUtils.joinArguments;
+import static utils.CommandUtils.normalizeCommandLabel;
+import static utils.DatabaseValueConverter.asBoolean;
+import static utils.DatabaseValueConverter.asInt;
+import static utils.TextComponentParser.escapeMiniMessage;
+
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -20,28 +25,30 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.bukkit.GameMode;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.persistence.PersistentDataType;
 
 import enums.GroupType;
 import menu.MenuItemBuilder;
 import menu.MenuSession;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
 import playerdata.Profile;
+import utils.DateTimeUtils;
 
 /**
  * Owns staff moderation commands, timed punishments and PRIUS records.
  *
- * <p>Timed states are persisted by {@link TimersModule}; this module supplies
- * their moderation meaning. A mute blocks chat, a buildoff state is displayed
- * to players as {@code Marked} and temporarily replaces the effective group
- * with {@link GroupType#PUNISHED}, jail is available to the future jail system,
- * and tempban is checked before a profile is created.</p>
+ * <p>{@link TimersModule} persists generic clocks; this module gives the mute,
+ * jail, buildoff and tempban keys their moderation meaning. Buildoff is shown
+ * to players as {@code Marked} and changes only the effective group, preserving
+ * the player's assigned database group for automatic restoration.</p>
  *
- * <p>Permanent {@code /ban} and {@code /unban} deliberately do not live here.
- * They are core safety commands registered by {@code CoreModerationCommands},
- * so disabling this module cannot accidentally admit permanently banned
- * players.</p>
+ * <p>Permanent {@code /ban} and {@code /unban} deliberately remain in core so
+ * disabling this module cannot admit permanently banned players.</p>
  */
 public final class ModerationModule extends BaseModule {
 
@@ -51,8 +58,9 @@ public final class ModerationModule extends BaseModule {
     private static final int MAX_REASON_LENGTH = 500;
     private static final int CHAT_CLEAR_LINES = 100;
     private static final long RESTRICTION_MESSAGE_DELAY_MILLIS = 2_000L;
+    private static final Duration MAX_MODERATION_SENTENCE = Duration.ofDays(365);
     private static final DateTimeFormatter STAFF_DATE_TIME =
-            DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss");
+            DateTimeFormatter.ofPattern("yy-MM-dd HH:mm");
     private static final List<String> TIMER_ACTIONS = List.of("set", "add", "sub", "off");
     private static final List<String> COMMON_DURATIONS = List.of("30m", "1h", "1d", "1w");
     private static final Map<String, HelpEntry> HELP_ENTRIES = createHelpEntries();
@@ -64,11 +72,13 @@ public final class ModerationModule extends BaseModule {
     private final Set<Integer> temporarilyBannedPlayers = ConcurrentHashMap.newKeySet();
     private final Map<UUID, GameMode> hiddenStaffModes = new ConcurrentHashMap<>();
     private final Map<Integer, Long> lastRestrictionMessage = new ConcurrentHashMap<>();
+    private final NamespacedKey hiddenPreviousGameModeKey;
 
     private TimersModule timers;
 
     public ModerationModule() {
         super("Moderation", "1.0.0");
+        hiddenPreviousGameModeKey = new NamespacedKey(plugin, "moderation_previous_gamemode");
     }
 
     /** Declares the timer service as a real module dependency. */
@@ -87,8 +97,8 @@ public final class ModerationModule extends BaseModule {
     @Override
     protected void registerCommands() {
         addCommand("modhelp", command -> command.description(helpPlain("modhelp", "summary"))
-                .syntax(helpPlain("modhelp", "syntax"))
-                .minimumGroup(GroupType.MODERATOR).tabHandler(this::suggestModHelp));
+                .syntax(helpPlain("modhelp", "syntax")).minimumGroup(GroupType.MODERATOR)
+                .tabHandler(this::suggestModHelp));
         addCommand("player", command -> command.description(helpPlain("player", "summary"))
                 .syntax(helpPlain("player", "syntax")).minimumGroup(GroupType.MODERATOR)
                 .tabHandler(this::suggestRegisteredPlayers));
@@ -114,18 +124,16 @@ public final class ModerationModule extends BaseModule {
         addCommand("hide", command -> command.description(helpPlain("hide", "summary"))
                 .minimumGroup(GroupType.MODERATOR));
         addCommand("cc", command -> command.aliases("clearchat")
-                .description(helpPlain("cc", "summary"))
-                .minimumGroup(GroupType.MODERATOR));
+                .description(helpPlain("cc", "summary")).minimumGroup(GroupType.MODERATOR));
         addCommand("clear", command -> command.description(helpPlain("clear", "summary"))
                 .syntax(helpPlain("clear", "syntax")).minimumGroup(GroupType.ADMIN)
                 .tabHandler(this::suggestOnlinePlayers));
     }
 
-    /** Registers one uniform timed-punishment command. */
     private void addPunishmentCommand(String label) {
         addCommand(label, command -> command.description(helpPlain(label, "summary"))
-                .syntax(helpPlain(label, "syntax"))
-                .minimumGroup(GroupType.MODERATOR).tabHandler(this::suggestPunishmentArguments));
+                .syntax(helpPlain(label, "syntax")).minimumGroup(GroupType.MODERATOR)
+                .tabHandler(this::suggestPunishmentArguments));
     }
 
     /** Connects moderation timer keys to their runtime effects. */
@@ -151,14 +159,7 @@ public final class ModerationModule extends BaseModule {
 
         for (Profile profile : profiles().getOnlineProfiles()) {
             if (markedPlayers.contains(profile.getId())) profile.clearEffectiveGroupOverride();
-        }
-
-        for (Map.Entry<UUID, GameMode> hiddenStaff : List.copyOf(hiddenStaffModes.entrySet())) {
-            Profile profile = profiles().getOnlineProfile(hiddenStaff.getKey());
-            if (profile == null || profile.getPlayer() == null) continue;
-
-            revealHiddenStaff(profile);
-            profile.getPlayer().setGameMode(hiddenStaff.getValue());
+            restoreHiddenStaff(profile, false);
         }
 
         mutedPlayers.clear();
@@ -170,47 +171,45 @@ public final class ModerationModule extends BaseModule {
     }
 
     /**
-     * Synchronizes timer-derived state when this module is enabled while
-     * players are already online, and hides vanished staff from a new viewer.
+     * Rebuilds timer-derived state, repairs an interrupted hide session and
+     * delivers only current punishments plus previously unseen warnings.
      */
     @Override
     public void onProfileLoaded(Profile profile) {
         if (profile == null || timers == null) return;
 
-        for (UUID hiddenUuid : hiddenStaffModes.keySet()) {
-            Profile hiddenProfile = profiles().getOnlineProfile(hiddenUuid);
-            if (hiddenProfile != null && hiddenProfile.getPlayer() != null
-                    && profile.getPlayer() != null && profile.getId() != hiddenProfile.getId()) {
-                profile.getPlayer().hidePlayer(plugin, hiddenProfile.getPlayer());
-            }
-        }
+        restoreHiddenStaff(profile, false);
+        hideExistingStaffFromViewer(profile);
 
         for (Punishment punishment : Punishment.values()) {
             try {
-                Optional<TimersModule.PlayerTimer> timer =
-                        timers.findTimer(profile, punishment.timerKey);
-                applyPunishmentState(punishment, profile, timer.orElse(null), false);
+                TimersModule.PlayerTimer timer =
+                        timers.findTimer(profile, punishment.timerKey).orElse(null);
+                applyPunishmentState(punishment, profile, timer, false);
             } catch (SQLException exception) {
                 logError("Failed to synchronize " + punishment.timerKey
                         + " for playerId=" + profile.getId() + ".", exception);
             }
         }
+
+        notifyCurrentPunishments(profile);
+        deliverPendingWarnings(profile);
     }
 
-    /** Removes only session state when the profile leaves RAM. */
+    /** Restores hide state before the player profile leaves RAM. */
     @Override
     public void onProfileUnloaded(Profile profile) {
         if (profile == null) return;
 
+        restoreHiddenStaff(profile, false);
         mutedPlayers.remove(profile.getId());
         jailedPlayers.remove(profile.getId());
         markedPlayers.remove(profile.getId());
         temporarilyBannedPlayers.remove(profile.getId());
         lastRestrictionMessage.remove(profile.getId());
-        hiddenStaffModes.remove(profile.getUuid());
     }
 
-    /** Routes all registered moderation labels to compact command handlers. */
+    /** Routes registered labels to their compact command handlers. */
     @Override
     public boolean onCommand(Profile sender, String label, String[] arguments) {
         if (sender == null || label == null) return false;
@@ -239,10 +238,7 @@ public final class ModerationModule extends BaseModule {
     // Central-listener entry points
     // =====================================================================
 
-    /**
-     * Returns whether chat should be cancelled for this profile. The message is
-     * scheduled onto the server thread because Paper's chat event is async.
-     */
+    /** Returns whether chat should be cancelled for this profile. */
     public boolean shouldCancelChat(Profile profile) {
         if (!isMuted(profile)) return false;
 
@@ -251,17 +247,14 @@ public final class ModerationModule extends BaseModule {
         return true;
     }
 
-    /** @return whether this online profile currently has an active mute */
     public boolean isMuted(Profile profile) {
         return profile != null && mutedPlayers.contains(profile.getId());
     }
 
-    /** @return whether this online profile currently has an active jail timer */
     public boolean isJailed(Profile profile) {
         return profile != null && jailedPlayers.contains(profile.getId());
     }
 
-    /** @return whether this online profile currently uses Marked restrictions */
     public boolean isMarked(Profile profile) {
         return profile != null && markedPlayers.contains(profile.getId());
     }
@@ -281,12 +274,8 @@ public final class ModerationModule extends BaseModule {
     }
 
     /**
-     * Resolves an active tempban directly from SQL before an online profile
-     * exists. The database timestamp is authoritative; expired rows are
-     * discarded by the timer module later.
-     *
-     * @param uuid account attempting to log in
-     * @return disconnect message, or {@code null} when login may continue
+     * Resolves a tempban before an online profile exists. The disconnect text
+     * exposes the current reason, but never the staff member who issued it.
      */
     public Component getTemporaryBanLoginMessage(UUID uuid) {
         if (uuid == null) return null;
@@ -296,17 +285,21 @@ public final class ModerationModule extends BaseModule {
             if (playerId == null || playerId <= 0) return null;
 
             Map<String, Object> row = getDB().getRow("player_timers",
-                    List.of("expires_at"), "player_id = ? AND timer_key = ?",
+                    List.of("started_at", "expires_at"), "player_id = ? AND timer_key = ?",
                     List.of(playerId, Punishment.TEMPBAN.timerKey));
             if (row.isEmpty()) return null;
 
-            LocalDateTime expiresAt = readNullableDateTime(row.get("expires_at"));
-            if (expiresAt != null && !expiresAt.isAfter(LocalDateTime.now())) return null;
+            LocalDateTime expiresAt = DateTimeUtils.readNullableDateTime(row.get("expires_at"));
+            if (expiresAt != null && !expiresAt.isAfter(now())) return null;
 
-            return expiresAt == null
-                    ? getText("moderation.tempban.login_indefinite")
-                    : getText("moderation.tempban.login_timed", formatDateTime(expiresAt),
-                            TimersModule.formatDuration(Duration.between(LocalDateTime.now(), expiresAt)));
+            String reason = escapeMiniMessage(findCurrentPunishmentReason(
+                    playerId, Punishment.TEMPBAN));
+            if (expiresAt == null) {
+                return getText("moderation.tempban.login_indefinite", reason);
+            }
+
+            return getText("moderation.tempban.login_timed", formatDateTime(expiresAt),
+                    formatModerationDuration(Duration.between(now(), expiresAt)), reason);
         } catch (SQLException | DateTimeException exception) {
             logError("Failed to check tempban before login for UUID " + uuid + ".", exception);
             return null;
@@ -332,8 +325,7 @@ public final class ModerationModule extends BaseModule {
 
         if (arguments[0].equalsIgnoreCase("topic")) {
             if (arguments.length != 2 || !HELP_TOPICS.contains(arguments[1].toLowerCase(Locale.ROOT))) {
-                sender.sendMessage(getText("moderation.help.topic_usage",
-                        String.join(", ", HELP_TOPICS)));
+                sender.sendMessage(getText("moderation.help.topic_usage", String.join(", ", HELP_TOPICS)));
                 return true;
             }
 
@@ -353,7 +345,7 @@ public final class ModerationModule extends BaseModule {
         return true;
     }
 
-    /** Builds a small hardcoded navigation menu; command documentation stays in lang.yml. */
+    /** Builds a hardcoded navigation menu while keeping prose in lang.yml. */
     private boolean openModerationHelp(Profile sender) {
         MenuSession menu = menus().create(sender, 27, getText("moderation.help.menu_title"))
                 .requireMinimumGroup(GroupType.MODERATOR, getText("command.no_permission"));
@@ -362,8 +354,7 @@ public final class ModerationModule extends BaseModule {
         for (HelpEntry entry : HELP_ENTRIES.values()) {
             ItemStack icon = MenuItemBuilder.of(entry.icon)
                     .name(getText("moderation.help.menu_name", "/" + entry.label))
-                    .lore(getText("moderation.help.menu_lore",
-                            helpPlain(entry.label, "summary")))
+                    .lore(getText("moderation.help.menu_lore", helpPlain(entry.label, "summary")))
                     .build();
             menu.button(slot++, icon, menu.runCommand("modhelp " + entry.label));
         }
@@ -376,7 +367,7 @@ public final class ModerationModule extends BaseModule {
         if (arguments.length != 1) return sendUsage(sender, helpPlain("player", "syntax"));
 
         Profile target = requireKnownPlayer(sender, arguments[0]);
-        if (target == null) return true;
+        if (target == null || !mayInspectStaffRecord(sender, target)) return true;
 
         try {
             Map<String, Object> playerRow = getDB().getRow("players",
@@ -402,8 +393,8 @@ public final class ModerationModule extends BaseModule {
                     target.isOnline() ? lang.plain("moderation.player.online")
                             : lang.plain("moderation.player.offline"),
                     formatDatabaseDate(playerRow.get("first_login_at")),
-                    formatDatabaseDate(playerRow.get("last_login_at")),
-                    punishments, permanentlyBanned ? lang.plain("moderation.player.affirmative")
+                    formatDatabaseDate(playerRow.get("last_login_at")), punishments,
+                    permanentlyBanned ? lang.plain("moderation.player.affirmative")
                             : lang.plain("moderation.player.negative"), priusEntries));
         } catch (SQLException exception) {
             logError("Failed to load staff sheet for playerId=" + target.getId() + ".", exception);
@@ -423,17 +414,9 @@ public final class ModerationModule extends BaseModule {
         }
 
         Profile target = requireKnownPlayer(sender, arguments[0]);
-        if (target == null) return true;
+        if (target == null || !mayInspectStaffRecord(sender, target)) return true;
 
-        int page = 1;
-        if (arguments.length == 2) {
-            try {
-                page = Integer.parseInt(arguments[1]);
-            } catch (NumberFormatException ignored) {
-                page = 0;
-            }
-        }
-
+        int page = arguments.length == 1 ? 1 : parsePositivePage(arguments[1]);
         if (page < 1) {
             sender.sendMessage(getText("moderation.prius.invalid_page"));
             return true;
@@ -441,20 +424,23 @@ public final class ModerationModule extends BaseModule {
 
         try {
             List<Map<String, Object>> rows = getDB().getRows(PRIUS_TABLE,
-                    List.of("id", "staff_id", "entry_class", "entry_type", "recorded_at", "entry_text"),
+                    List.of("id", "staff_id", "entry_class", "entry_type", "entry_action",
+                            "recorded_at", "entry_text"),
                     "player_id = ?", List.of(target.getId()));
             rows.sort(Comparator.comparingInt(
                     (Map<String, Object> row) -> asInt(row.get("id"))).reversed());
 
-            int totalPages = Math.max(1, (rows.size() + PRIUS_ENTRIES_PER_PAGE - 1)
-                    / PRIUS_ENTRIES_PER_PAGE);
+            int totalPages = Math.max(1,
+                    (rows.size() + PRIUS_ENTRIES_PER_PAGE - 1) / PRIUS_ENTRIES_PER_PAGE);
             if (page > totalPages) {
                 sender.sendMessage(getText("moderation.prius.page_missing", page, totalPages));
                 return true;
             }
 
-            sender.sendMessage(getText("moderation.prius.header", target.getIgn(), page, totalPages,
-                    rows.size()));
+            sender.sendMessage(getText("moderation.prius.header", target.getIgn(), page,
+                    totalPages, rows.size()));
+            if (page == 1) sendPriusSummary(sender, target, rows);
+
             int fromIndex = (page - 1) * PRIUS_ENTRIES_PER_PAGE;
             int toIndex = Math.min(rows.size(), fromIndex + PRIUS_ENTRIES_PER_PAGE);
 
@@ -462,12 +448,11 @@ public final class ModerationModule extends BaseModule {
                 sender.sendMessage(getText("moderation.prius.empty"));
             } else {
                 for (Map<String, Object> row : rows.subList(fromIndex, toIndex)) {
-                    sender.sendMessage(getText("moderation.prius.entry",
-                            formatDatabaseDate(row.get("recorded_at")), row.get("entry_class"),
-                            row.get("entry_type"), resolveStaffName(asInt(row.get("staff_id"))),
-                            escapeMiniMessage(String.valueOf(row.get("entry_text")))));
+                    sendPriusEntry(sender, row);
                 }
             }
+
+            sender.sendMessage(createPriusFooter(target.getIgn(), page, totalPages));
         } catch (SQLException exception) {
             logError("Failed to load PRIUS for playerId=" + target.getId() + ".", exception);
             sender.sendMessage(getText("moderation.database_error"));
@@ -476,11 +461,67 @@ public final class ModerationModule extends BaseModule {
         return true;
     }
 
+    private void sendPriusSummary(Profile sender, Profile target, List<Map<String, Object>> rows)
+            throws SQLException {
+        PriusSummary summary = PriusSummary.from(rows);
+        List<String> active = new ArrayList<>();
+
+        for (Punishment punishment : Punishment.values()) {
+            if (timers.hasTimer(target, punishment.timerKey)) active.add(punishment.displayName);
+        }
+        if (Boolean.TRUE.equals(getDB().getBoolean("players", "flag_banned",
+                "id = ?", List.of(target.getId())))) active.add("Permanent ban");
+
+        sender.sendMessage(getText("moderation.prius.summary_punishments", summary.warnings(),
+                summary.mutes(), summary.jails(), summary.buildoffs(), summary.tempbans(),
+                summary.permanentBans()));
+        sender.sendMessage(getText("moderation.prius.summary_other", summary.kicks(),
+                summary.notes()));
+        sender.sendMessage(getText("moderation.prius.summary_active",
+                active.isEmpty() ? lang.plain("moderation.prius.summary_none")
+                        : String.join(", ", active)));
+    }
+
+    private void sendPriusEntry(Profile sender, Map<String, Object> row) {
+        String entryClass = String.valueOf(row.get("entry_class"));
+        String entryType = String.valueOf(row.get("entry_type"));
+        String action = row.get("entry_action") == null ? "" : row.get("entry_action").toString();
+        String typeAndAction = action.isBlank()
+                ? entryType.toUpperCase(Locale.ROOT)
+                : entryType.toUpperCase(Locale.ROOT) + "/" + action.toUpperCase(Locale.ROOT);
+        String headerKey = switch (entryClass.toLowerCase(Locale.ROOT)) {
+            case "punishment" -> "moderation.prius.entry_punishment";
+            case "warning" -> "moderation.prius.entry_warning";
+            case "note" -> "moderation.prius.entry_note";
+            default -> "moderation.prius.entry_info";
+        };
+
+        sender.sendMessage(getText(headerKey, formatDatabaseDate(row.get("recorded_at")),
+                typeAndAction, resolveStaffName(asInt(row.get("staff_id")))));
+        sender.sendMessage(getText("moderation.prius.entry_text",
+                escapeMiniMessage(String.valueOf(row.get("entry_text")))));
+    }
+
+    private Component createPriusFooter(String username, int page, int totalPages) {
+        Component previous = page > 1
+                ? getText("moderation.prius.previous").clickEvent(
+                        ClickEvent.runCommand("/prius " + username + " " + (page - 1)))
+                        .hoverEvent(HoverEvent.showText(getText("moderation.prius.previous_hover")))
+                : getText("moderation.prius.previous_disabled");
+        Component next = page < totalPages
+                ? getText("moderation.prius.next").clickEvent(
+                        ClickEvent.runCommand("/prius " + username + " " + (page + 1)))
+                        .hoverEvent(HoverEvent.showText(getText("moderation.prius.next_hover")))
+                : getText("moderation.prius.next_disabled");
+
+        return previous.append(getText("moderation.prius.page", page, totalPages)).append(next);
+    }
+
     private boolean handleNote(Profile sender, String[] arguments) {
         if (arguments.length < 2) return sendUsage(sender, helpPlain("note", "syntax"));
 
         Profile target = requireKnownPlayer(sender, arguments[0]);
-        if (target == null) return true;
+        if (target == null || !mayInspectStaffRecord(sender, target)) return true;
 
         String note = joinArguments(arguments, 1);
         if (!isValidReason(note)) {
@@ -488,7 +529,8 @@ public final class ModerationModule extends BaseModule {
             return true;
         }
 
-        if (recordPrius(target, sender, "note", "staff_note", note)) {
+        if (recordPrius(target, sender, "note", "staff_note", "create",
+                null, null, null, note)) {
             sender.sendMessage(getText("moderation.note.saved", target.getIgn()));
         } else {
             sender.sendMessage(getText("moderation.database_error"));
@@ -497,11 +539,11 @@ public final class ModerationModule extends BaseModule {
         return true;
     }
 
-    /** Records every warning, including the default warning without a typed reason. */
+    /** Records online and offline warnings; offline warnings are delivered once on login. */
     private boolean handleWarn(Profile sender, String[] arguments) {
         if (arguments.length < 1) return sendUsage(sender, helpPlain("warn", "syntax"));
 
-        Profile target = requireOnlinePunishableTarget(sender, arguments[0]);
+        Profile target = requireActionTarget(sender, arguments[0], false);
         if (target == null) return true;
 
         String reason = arguments.length == 1
@@ -512,29 +554,58 @@ public final class ModerationModule extends BaseModule {
             return true;
         }
 
-        if (!recordPrius(target, sender, "warning", "warning", reason)) {
+        LocalDateTime notifiedAt = target.isOnline() ? now() : null;
+        if (!recordPrius(target, sender, "warning", "warning", "issue",
+                null, null, notifiedAt, reason)) {
             sender.sendMessage(getText("moderation.database_error"));
             return true;
         }
 
-        target.sendMessageIfOnline(getText("moderation.warn.received", sender.getIgn(),
-                escapeMiniMessage(reason)));
-        sender.sendMessage(getText("moderation.warn.sent", target.getIgn()));
+        target.sendMessageIfOnline(getText("moderation.warn.received", escapeMiniMessage(reason)));
+        sender.sendMessage(getText(target.isOnline()
+                ? "moderation.warn.sent_online"
+                : "moderation.warn.saved_offline", target.getIgn()));
         return true;
     }
 
-    private boolean recordPrius(Profile target, Profile staff, String entryClass,
-            String entryType, String entryText) {
-        if (target == null || staff == null || target.getId() <= 0 || staff.getId() <= 0
+    private boolean recordPrius(Profile target, Profile staff, String entryClass, String entryType,
+            String entryAction, Long durationSeconds, LocalDateTime expiresAt,
+            LocalDateTime notifiedAt, String entryText) {
+        if (target == null || staff == null || target.getId() <= 0 || staff.getId() < 0
                 || entryText == null || entryText.isBlank()) return false;
 
         try {
             return getDB().insert(PRIUS_TABLE,
-                    List.of("player_id", "staff_id", "entry_class", "entry_type", "entry_text"),
-                    List.of(target.getId(), staff.getId(), entryClass, entryType, entryText)) == 1;
+                    List.of("player_id", "staff_id", "entry_class", "entry_type",
+                            "entry_action", "duration_seconds", "expires_at", "notified_at",
+                            "entry_text"),
+                    java.util.Arrays.asList(target.getId(), staff.getId(), entryClass, entryType,
+                            entryAction, durationSeconds, expiresAt, notifiedAt, entryText)) == 1;
         } catch (SQLException exception) {
             logError("Failed to add PRIUS entry for playerId=" + target.getId() + ".", exception);
             return false;
+        }
+    }
+
+    private void deliverPendingWarnings(Profile profile) {
+        if (!profile.isOnline()) return;
+
+        try {
+            List<Map<String, Object>> warnings = getDB().getRows(PRIUS_TABLE,
+                    List.of("id", "entry_text"),
+                    "player_id = ? AND entry_class = ? AND notified_at IS NULL",
+                    List.of(profile.getId(), "warning"));
+            warnings.sort(Comparator.comparingInt(row -> asInt(row.get("id"))));
+
+            for (Map<String, Object> warning : warnings) {
+                profile.sendMessage(getText("moderation.warn.received",
+                        escapeMiniMessage(String.valueOf(warning.get("entry_text")))));
+                getDB().update(PRIUS_TABLE, List.of("notified_at"), List.of(now()),
+                        "id = ?", asInt(warning.get("id")));
+            }
+        } catch (SQLException exception) {
+            logError("Failed to deliver pending warnings for playerId=" + profile.getId() + ".",
+                    exception);
         }
     }
 
@@ -545,7 +616,7 @@ public final class ModerationModule extends BaseModule {
     private boolean handleKick(Profile sender, String[] arguments) {
         if (arguments.length < 2) return sendUsage(sender, helpPlain("kick", "syntax"));
 
-        Profile target = requireOnlinePunishableTarget(sender, arguments[0]);
+        Profile target = requireActionTarget(sender, arguments[0], true);
         if (target == null) return true;
 
         String reason = joinArguments(arguments, 1);
@@ -554,7 +625,8 @@ public final class ModerationModule extends BaseModule {
             return true;
         }
 
-        if (!recordPrius(target, sender, "punishment", "kick", reason)) {
+        if (!recordPrius(target, sender, "punishment", "kick", "execute",
+                null, null, null, reason)) {
             sender.sendMessage(getText("moderation.database_error"));
             return true;
         }
@@ -569,7 +641,7 @@ public final class ModerationModule extends BaseModule {
             return sendUsage(sender, helpPlain("inv", "syntax"));
         }
 
-        Profile target = requireOnlinePunishableTarget(sender, arguments[0]);
+        Profile target = requireInventoryTarget(sender, arguments[0]);
         if (target == null) return true;
 
         String inventoryType = arguments.length == 1
@@ -595,15 +667,16 @@ public final class ModerationModule extends BaseModule {
         Player player = sender.getPlayer();
         if (player == null) return true;
 
-        GameMode previousMode = hiddenStaffModes.remove(sender.getUuid());
-        if (previousMode != null) {
-            revealHiddenStaff(sender);
-            player.setGameMode(previousMode);
-            sender.sendMessage(getText("moderation.hide.visible"));
+        if (isHidden(sender)) {
+            restoreHiddenStaff(sender, true);
             return true;
         }
 
-        hiddenStaffModes.put(sender.getUuid(), player.getGameMode());
+        GameMode previousMode = player.getGameMode();
+        hiddenStaffModes.put(sender.getUuid(), previousMode);
+        player.getPersistentDataContainer().set(hiddenPreviousGameModeKey,
+                PersistentDataType.STRING, previousMode.name());
+
         for (Player viewer : getServer().getOnlinePlayers()) {
             if (!viewer.getUniqueId().equals(sender.getUuid())) viewer.hidePlayer(plugin, player);
         }
@@ -613,11 +686,44 @@ public final class ModerationModule extends BaseModule {
         return true;
     }
 
-    private void revealHiddenStaff(Profile profile) {
-        if (profile == null || profile.getPlayer() == null) return;
+    private boolean isHidden(Profile profile) {
+        return hiddenStaffModes.containsKey(profile.getUuid())
+                || profile.getPlayer() != null && profile.getPlayer().getPersistentDataContainer()
+                        .has(hiddenPreviousGameModeKey, PersistentDataType.STRING);
+    }
 
-        for (Player viewer : getServer().getOnlinePlayers()) {
-            viewer.showPlayer(plugin, profile.getPlayer());
+    /** Restores visibility and the mode saved both in RAM and persistent player data. */
+    private void restoreHiddenStaff(Profile profile, boolean notify) {
+        if (profile == null || profile.getPlayer() == null || !isHidden(profile)) return;
+
+        Player player = profile.getPlayer();
+        GameMode previousMode = hiddenStaffModes.remove(profile.getUuid());
+        String storedMode = player.getPersistentDataContainer().get(hiddenPreviousGameModeKey,
+                PersistentDataType.STRING);
+        player.getPersistentDataContainer().remove(hiddenPreviousGameModeKey);
+
+        if (previousMode == null && storedMode != null) {
+            try {
+                previousMode = GameMode.valueOf(storedMode);
+            } catch (IllegalArgumentException ignored) {
+                previousMode = GameMode.SURVIVAL;
+            }
+        }
+
+        for (Player viewer : getServer().getOnlinePlayers()) viewer.showPlayer(plugin, player);
+        if (previousMode != null) player.setGameMode(previousMode);
+        if (notify) profile.sendMessage(getText("moderation.hide.visible"));
+    }
+
+    private void hideExistingStaffFromViewer(Profile viewerProfile) {
+        if (viewerProfile.getPlayer() == null) return;
+
+        for (UUID hiddenUuid : hiddenStaffModes.keySet()) {
+            Profile hiddenProfile = profiles().getOnlineProfile(hiddenUuid);
+            if (hiddenProfile != null && hiddenProfile.getPlayer() != null
+                    && viewerProfile.getId() != hiddenProfile.getId()) {
+                viewerProfile.getPlayer().hidePlayer(plugin, hiddenProfile.getPlayer());
+            }
         }
     }
 
@@ -637,7 +743,7 @@ public final class ModerationModule extends BaseModule {
 
         Profile target = arguments[0].equalsIgnoreCase(sender.getIgn())
                 ? sender
-                : requireOnlinePunishableTarget(sender, arguments[0]);
+                : requireActionTarget(sender, arguments[0], true);
         if (target == null) return true;
 
         target.getPlayer().getInventory().clear();
@@ -645,7 +751,7 @@ public final class ModerationModule extends BaseModule {
         sender.sendMessage(getText("moderation.clear.completed", target.getIgn()));
 
         if (target.getId() != sender.getId()) {
-            target.sendMessage(getText("moderation.clear.received", sender.getIgn()));
+            target.sendMessage(getText("moderation.clear.received"));
         }
 
         return true;
@@ -656,21 +762,16 @@ public final class ModerationModule extends BaseModule {
     // =====================================================================
 
     private boolean handlePunishment(Profile sender, Punishment punishment, String[] arguments) {
-        if (arguments.length == 0) {
-            sender.sendMessage(getText("moderation.punishment.usage", punishment.commandLabel));
-            return true;
-        }
+        if (arguments.length == 0) return sendPunishmentUsage(sender, punishment);
 
-        Profile target = requirePunishableTarget(sender, arguments[0]);
+        Profile target = requirePunishmentTarget(sender, punishment, arguments[0]);
         if (target == null) return true;
-
         if (arguments.length == 1) return showPunishment(sender, target, punishment);
 
         String operation = arguments[1].toLowerCase(Locale.ROOT);
         if (operation.equals("off") || operation.equals("0")) {
-            String reason = arguments.length > 2 ? joinArguments(arguments, 2)
-                    : lang.plain("moderation.punishment.no_reason");
-            return removePunishment(sender, target, punishment, reason);
+            if (arguments.length < 3) return sendPunishmentUsage(sender, punishment);
+            return removePunishment(sender, target, punishment, joinArguments(arguments, 2));
         }
 
         boolean explicitOperation = TIMER_ACTIONS.contains(operation);
@@ -678,22 +779,18 @@ public final class ModerationModule extends BaseModule {
                 ? arguments.length > 2 ? arguments[2] : ""
                 : arguments[1];
         int reasonStart = explicitOperation ? 3 : 2;
-        String reason = arguments.length > reasonStart
-                ? joinArguments(arguments, reasonStart)
-                : lang.plain("moderation.punishment.no_reason");
+        if (durationInput.isBlank() || arguments.length <= reasonStart) {
+            return sendPunishmentUsage(sender, punishment);
+        }
 
+        String reason = joinArguments(arguments, reasonStart);
         if (!isValidReason(reason)) {
             sender.sendMessage(getText("moderation.reason_invalid", MAX_REASON_LENGTH));
             return true;
         }
 
-        if (durationInput.isBlank()) {
-            sender.sendMessage(getText("moderation.punishment.usage", punishment.commandLabel));
-            return true;
-        }
-
         if (durationInput.equalsIgnoreCase("infinite")) {
-            if (operation.equals("add") || operation.equals("sub") || !punishment.allowsIndefinite) {
+            if ((explicitOperation && !operation.equals("set")) || !punishment.allowsIndefinite) {
                 sender.sendMessage(getText("moderation.punishment.infinite_not_allowed",
                         punishment.displayName));
                 return true;
@@ -703,14 +800,20 @@ public final class ModerationModule extends BaseModule {
         }
 
         Optional<Duration> parsedDuration = TimersModule.parseDuration(durationInput);
-        if (parsedDuration.isEmpty()) {
+        if (parsedDuration.isEmpty() || TimersModule.containsSecondsUnit(durationInput)
+                || parsedDuration.get().getSeconds() % 60L != 0L) {
             sender.sendMessage(getText("moderation.punishment.invalid_duration", durationInput));
             return true;
         }
 
-        String effectiveOperation = explicitOperation ? operation : "add";
-        return changeFinitePunishment(sender, target, punishment, effectiveOperation,
+        String requestedOperation = explicitOperation ? operation : "automatic";
+        return changeFinitePunishment(sender, target, punishment, requestedOperation,
                 parsedDuration.get(), reason);
+    }
+
+    private boolean sendPunishmentUsage(Profile sender, Punishment punishment) {
+        sender.sendMessage(getText("moderation.punishment.usage", punishment.commandLabel));
+        return true;
     }
 
     private boolean showPunishment(Profile sender, Profile target, Punishment punishment) {
@@ -723,11 +826,13 @@ public final class ModerationModule extends BaseModule {
                         punishment.displayName));
             } else if (timer.isIndefinite()) {
                 sender.sendMessage(getText("moderation.punishment.active_indefinite", target.getIgn(),
-                        punishment.displayName));
+                        punishment.displayName,
+                        escapeMiniMessage(findCurrentPunishmentReason(target.getId(), punishment))));
             } else {
                 sender.sendMessage(getText("moderation.punishment.active_timed", target.getIgn(),
                         punishment.displayName, formatDateTime(timer.expiresAt()),
-                        TimersModule.formatDuration(timer.remainingAt(LocalDateTime.now()))));
+                        formatModerationDuration(timer.remainingAt(now())),
+                        escapeMiniMessage(findCurrentPunishmentReason(target.getId(), punishment))));
             }
         } catch (SQLException exception) {
             logError("Failed to inspect " + punishment.timerKey
@@ -741,14 +846,21 @@ public final class ModerationModule extends BaseModule {
     private boolean setIndefinitePunishment(Profile sender, Profile target,
             Punishment punishment, String reason) {
         try {
-            timers.setIndefiniteTimer(target, punishment.timerKey);
-            String record = createPunishmentRecord("set", punishment, "indefinite", null, reason);
-            if (!recordPrius(target, sender, "punishment", punishment.timerKey, record)) {
+            TimersModule.PlayerTimer previous =
+                    timers.findTimer(target, punishment.timerKey).orElse(null);
+            if (previous != null && !mayShortenPunishment(sender)) return rejectReduction(sender);
+
+            TimersModule.PlayerTimer current =
+                    timers.setIndefiniteTimer(target, punishment.timerKey);
+            if (!recordPrius(target, sender, "punishment", punishment.timerKey, "set",
+                    null, null, null, reason)) {
                 sender.sendMessage(getText("moderation.prius.save_failed"));
             }
+
             sender.sendMessage(getText("moderation.punishment.set_indefinite", target.getIgn(),
                     punishment.displayName));
-            notifyPunishedPlayer(target, sender, punishment, "indefinite", reason);
+            notifyCurrentPunishment(target, punishment, current, reason);
+            announceStaffEmergency(sender, target, punishment, "set", "indefinite", reason);
         } catch (SQLException exception) {
             handlePunishmentDatabaseFailure(sender, target, punishment, exception);
         }
@@ -757,10 +869,15 @@ public final class ModerationModule extends BaseModule {
     }
 
     private boolean changeFinitePunishment(Profile sender, Profile target, Punishment punishment,
-            String operation, Duration duration, String reason) {
+            String requestedOperation, Duration duration, String reason) {
         try {
             TimersModule.PlayerTimer previous =
                     timers.findTimer(target, punishment.timerKey).orElse(null);
+            String operation = requestedOperation;
+
+            if (operation.equals("automatic")) operation = previous == null ? "set" : "add";
+            if (operation.equals("add") && previous == null) operation = "set";
+
             if (operation.equals("sub") && previous == null) {
                 sender.sendMessage(getText("moderation.punishment.inactive", target.getIgn(),
                         punishment.displayName));
@@ -772,43 +889,49 @@ public final class ModerationModule extends BaseModule {
                         target.getIgn(), punishment.displayName));
                 return true;
             }
+            if ((operation.equals("sub") || operation.equals("set") && previous != null)
+                    && !mayShortenPunishment(sender)) return rejectReduction(sender);
+            if (!fitsSentenceLimit(previous, operation, duration)) {
+                sender.sendMessage(getText("moderation.punishment.too_long", 365));
+                return true;
+            }
 
             TimersModule.PlayerTimer current;
             switch (operation) {
                 case "set" -> current = timers.setTimer(target, punishment.timerKey, duration);
                 case "add" -> current = timers.addTime(target, punishment.timerKey, duration);
-                case "sub" -> {
-                    Optional<TimersModule.PlayerTimer> result =
-                            timers.subtractTime(target, punishment.timerKey, duration);
-                    current = result.orElse(null);
-                }
+                case "sub" -> current = timers.subtractTime(target, punishment.timerKey, duration)
+                        .orElse(null);
                 default -> {
                     sender.sendMessage(getText("moderation.punishment.unknown_action", operation));
                     return true;
                 }
             }
 
-            String formattedDuration = TimersModule.formatDuration(duration);
-            String record = createPunishmentRecord(operation, punishment, formattedDuration,
-                    current == null ? null : current.expiresAt(), reason);
-            if (!recordPrius(target, sender, "punishment", punishment.timerKey, record)) {
+            if (!recordPrius(target, sender, "punishment", punishment.timerKey, operation,
+                    duration.getSeconds(), current == null ? null : current.expiresAt(),
+                    null, reason)) {
                 sender.sendMessage(getText("moderation.prius.save_failed"));
             }
 
+            String formattedDuration = formatModerationDuration(duration);
             if (current == null) {
                 sender.sendMessage(getText("moderation.punishment.ended", target.getIgn(),
                         punishment.displayName));
                 target.sendMessageIfOnline(getText("moderation.punishment.removed_target",
-                        punishment.displayName, sender.getIgn(), escapeMiniMessage(reason)));
+                        punishment.displayName, escapeMiniMessage(reason)));
             } else {
                 sender.sendMessage(getText("moderation.punishment.changed", target.getIgn(),
                         punishment.displayName, operation, formattedDuration,
                         formatDateTime(current.expiresAt())));
-                notifyPunishedPlayer(target, sender, punishment, formattedDuration, reason);
+                notifyCurrentPunishment(target, punishment, current, reason);
             }
-        } catch (IllegalArgumentException | DateTimeException exception) {
+
+            announceStaffEmergency(sender, target, punishment, operation,
+                    current == null ? "ended" : formattedDuration, reason);
+        } catch (IllegalArgumentException | IllegalStateException | DateTimeException exception) {
             sender.sendMessage(getText("moderation.punishment.invalid_duration",
-                    TimersModule.formatDuration(duration)));
+                    formatModerationDuration(duration)));
         } catch (SQLException exception) {
             handlePunishmentDatabaseFailure(sender, target, punishment, exception);
         }
@@ -822,6 +945,7 @@ public final class ModerationModule extends BaseModule {
             sender.sendMessage(getText("moderation.reason_invalid", MAX_REASON_LENGTH));
             return true;
         }
+        if (!mayShortenPunishment(sender)) return rejectReduction(sender);
 
         try {
             if (!timers.resetTimer(target, punishment.timerKey)) {
@@ -830,14 +954,15 @@ public final class ModerationModule extends BaseModule {
                 return true;
             }
 
-            if (!recordPrius(target, sender, "punishment", punishment.timerKey,
-                    createPunishmentRecord("off", punishment, null, null, reason))) {
+            if (!recordPrius(target, sender, "punishment", punishment.timerKey, "off",
+                    null, null, null, reason)) {
                 sender.sendMessage(getText("moderation.prius.save_failed"));
             }
             sender.sendMessage(getText("moderation.punishment.removed", target.getIgn(),
                     punishment.displayName));
             target.sendMessageIfOnline(getText("moderation.punishment.removed_target",
-                    punishment.displayName, sender.getIgn(), escapeMiniMessage(reason)));
+                    punishment.displayName, escapeMiniMessage(reason)));
+            announceStaffEmergency(sender, target, punishment, "off", "ended", reason);
         } catch (SQLException exception) {
             handlePunishmentDatabaseFailure(sender, target, punishment, exception);
         }
@@ -845,21 +970,78 @@ public final class ModerationModule extends BaseModule {
         return true;
     }
 
-    private void notifyPunishedPlayer(Profile target, Profile sender, Punishment punishment,
-            String duration, String reason) {
-        if (punishment == Punishment.TEMPBAN) return;
-
-        target.sendMessageIfOnline(getText("moderation.punishment.applied_target",
-                punishment.displayName, duration, sender.getIgn(), escapeMiniMessage(reason)));
+    /** Moderators may extend sentences; Senior Moderators may shorten or replace them. */
+    private boolean mayShortenPunishment(Profile sender) {
+        return sender.meetsMinimumAssignedGroup(GroupType.SENIOR_MODERATOR);
     }
 
-    private String createPunishmentRecord(String operation, Punishment punishment,
-            String duration, LocalDateTime expiresAt, String reason) {
-        StringBuilder record = new StringBuilder(operation.toUpperCase(Locale.ROOT))
-                .append(' ').append(punishment.displayName);
-        if (duration != null) record.append(" | duration: ").append(duration);
-        if (expiresAt != null) record.append(" | expires: ").append(formatDateTime(expiresAt));
-        return record.append(" | reason: ").append(reason).toString();
+    private boolean rejectReduction(Profile sender) {
+        sender.sendMessage(getText("moderation.punishment.reduction_denied"));
+        return true;
+    }
+
+    private boolean fitsSentenceLimit(TimersModule.PlayerTimer previous, String operation,
+            Duration change) {
+        if (operation.equals("sub")) return true;
+        if (operation.equals("set") || previous == null) {
+            return change.compareTo(MAX_MODERATION_SENTENCE) <= 0;
+        }
+        if (previous.isIndefinite()) return false;
+
+        Duration proposedSentence = Duration.between(previous.startedAt(),
+                previous.expiresAt().plus(change));
+        return proposedSentence.compareTo(MAX_MODERATION_SENTENCE) <= 0;
+    }
+
+    /** Sends one consolidated current state, never the staff identity or action history. */
+    private void notifyCurrentPunishment(Profile target, Punishment punishment,
+            TimersModule.PlayerTimer timer, String reason) {
+        if (!target.isOnline() || punishment == Punishment.TEMPBAN || timer == null) return;
+
+        if (timer.isIndefinite()) {
+            target.sendMessage(getText("moderation.punishment.active_target_indefinite",
+                    punishment.displayName, escapeMiniMessage(reason)));
+            return;
+        }
+
+        Duration fullSentence = Duration.between(timer.startedAt(), timer.expiresAt());
+        target.sendMessage(getText("moderation.punishment.active_target", punishment.displayName,
+                formatModerationDuration(fullSentence), formatDateTime(timer.expiresAt()),
+                escapeMiniMessage(reason)));
+    }
+
+    /** Sends one line per currently active punishment after login. */
+    private void notifyCurrentPunishments(Profile profile) {
+        if (!profile.isOnline()) return;
+
+        for (Punishment punishment : Punishment.values()) {
+            if (punishment == Punishment.TEMPBAN) continue;
+
+            try {
+                TimersModule.PlayerTimer timer =
+                        timers.findTimer(profile, punishment.timerKey).orElse(null);
+                if (timer != null) notifyCurrentPunishment(profile, punishment, timer,
+                        findCurrentPunishmentReason(profile.getId(), punishment));
+            } catch (SQLException exception) {
+                logError("Failed to notify active " + punishment.timerKey
+                        + " for playerId=" + profile.getId() + ".", exception);
+            }
+        }
+    }
+
+    private String findCurrentPunishmentReason(int playerId, Punishment punishment)
+            throws SQLException {
+        List<Map<String, Object>> rows = getDB().getRows(PRIUS_TABLE,
+                List.of("id", "entry_action", "entry_text"),
+                "player_id = ? AND entry_class = ? AND entry_type = ?",
+                List.of(playerId, "punishment", punishment.timerKey));
+
+        return rows.stream()
+                .max(Comparator.comparingInt(row -> asInt(row.get("id"))))
+                .filter(row -> !"off".equalsIgnoreCase(String.valueOf(row.get("entry_action"))))
+                .map(row -> String.valueOf(row.get("entry_text")))
+                .filter(reason -> !reason.isBlank())
+                .orElse(lang.plain("moderation.punishment.reason_unavailable"));
     }
 
     private void handlePunishmentDatabaseFailure(Profile sender, Profile target,
@@ -877,12 +1059,10 @@ public final class ModerationModule extends BaseModule {
 
     private void applyPunishmentState(Punishment punishment, Profile profile,
             TimersModule.PlayerTimer activeTimer, boolean naturallyExpired) {
-        /* Offline command targets are temporary profiles and must not enter session caches. */
         if (!profile.isCachedOnlineProfile()) return;
 
         Set<Integer> activePlayers = activeSet(punishment);
         boolean newlyActive = activeTimer != null && activePlayers.add(profile.getId());
-
         if (activeTimer == null) activePlayers.remove(profile.getId());
 
         if (punishment == Punishment.BUILDOFF) {
@@ -896,17 +1076,33 @@ public final class ModerationModule extends BaseModule {
             if (profile.getPlayer() != null) profile.getPlayer().updateCommands();
         }
 
+        /* Delay one tick so the matching PRIUS reason is committed before the kick text is built. */
         if (punishment == Punishment.TEMPBAN && newlyActive && profile.isOnline()) {
-            profile.getPlayer().kick(activeTimer.isIndefinite()
-                    ? getText("moderation.tempban.login_indefinite")
-                    : getText("moderation.tempban.login_timed",
-                            formatDateTime(activeTimer.expiresAt()),
-                            TimersModule.formatDuration(activeTimer.remainingAt(LocalDateTime.now()))));
+            getServer().getScheduler().runTask(plugin, () -> kickActiveTempban(profile));
         }
 
         if (naturallyExpired) {
             profile.sendMessageIfOnline(getText("moderation.punishment.expired",
                     punishment.displayName));
+        }
+    }
+
+    private void kickActiveTempban(Profile profile) {
+        if (!profile.isOnline()) return;
+
+        try {
+            TimersModule.PlayerTimer timer =
+                    timers.findTimer(profile, Punishment.TEMPBAN.timerKey).orElse(null);
+            if (timer == null) return;
+
+            String reason = escapeMiniMessage(findCurrentPunishmentReason(
+                    profile.getId(), Punishment.TEMPBAN));
+            profile.getPlayer().kick(timer.isIndefinite()
+                    ? getText("moderation.tempban.login_indefinite", reason)
+                    : getText("moderation.tempban.login_timed", formatDateTime(timer.expiresAt()),
+                            formatModerationDuration(timer.remainingAt(now())), reason));
+        } catch (SQLException exception) {
+            logError("Failed to enforce tempban for playerId=" + profile.getId() + ".", exception);
         }
     }
 
@@ -920,6 +1116,28 @@ public final class ModerationModule extends BaseModule {
     }
 
     // =====================================================================
+    // Staff emergency policy
+    // =====================================================================
+
+    private void announceStaffEmergency(Profile sender, Profile target, Punishment punishment,
+            String operation, String duration, String reason) {
+        if (!punishment.staffEmergency || !isStaff(target)) return;
+
+        String alert = lang.plain("moderation.staff_emergency.alert", sender.getIgn(),
+                target.getIgn(), punishment.displayName, operation, duration,
+                escapeMiniMessage(reason));
+        logWarning(alert);
+
+        for (Profile staff : profiles().getOnlineProfiles()) {
+            if (staff.getId() == sender.getId() || staff.getId() == target.getId()
+                    || !staff.meetsMinimumAssignedGroup(GroupType.SENIOR_MODERATOR)) continue;
+            staff.sendMessage(getText("moderation.staff_emergency.alert", sender.getIgn(),
+                    target.getIgn(), punishment.displayName, operation, duration,
+                    escapeMiniMessage(reason)));
+        }
+    }
+
+    // =====================================================================
     // Target resolution and completion
     // =====================================================================
 
@@ -929,11 +1147,10 @@ public final class ModerationModule extends BaseModule {
             sender.sendMessage(getText("moderation.player_not_found", username));
             return null;
         }
-
         return target;
     }
 
-    private Profile requirePunishableTarget(Profile sender, String username) {
+    private Profile requireActionTarget(Profile sender, String username, boolean requireOnline) {
         Profile target = requireKnownPlayer(sender, username);
         if (target == null) return null;
 
@@ -941,7 +1158,37 @@ public final class ModerationModule extends BaseModule {
             sender.sendMessage(getText("moderation.cannot_target_self"));
             return null;
         }
+        if (isStaff(target) && !sender.meetsMinimumAssignedGroup(GroupType.ADMIN)) {
+            sender.sendMessage(getText("moderation.cannot_target_group", target.getIgn()));
+            return null;
+        }
+        if (!isStrictlyHigherGroup(sender, target)) {
+            sender.sendMessage(getText("moderation.cannot_target_group", target.getIgn()));
+            return null;
+        }
+        if (requireOnline && !target.isOnline()) {
+            sender.sendMessage(getText("moderation.player_offline", target.getIgn()));
+            return null;
+        }
 
+        return target;
+    }
+
+    private Profile requirePunishmentTarget(Profile sender, Punishment punishment, String username) {
+        boolean selfRequested = username.equalsIgnoreCase("self")
+                || username.equalsIgnoreCase(sender.getIgn());
+        Profile target = selfRequested ? sender : requireKnownPlayer(sender, username);
+        if (target == null) return null;
+
+        if (punishment.staffEmergency && isStaff(target)) return target;
+        if (selfRequested) {
+            sender.sendMessage(getText("moderation.cannot_target_self"));
+            return null;
+        }
+        if (isStaff(target) && !sender.meetsMinimumAssignedGroup(GroupType.ADMIN)) {
+            sender.sendMessage(getText("moderation.cannot_target_group", target.getIgn()));
+            return null;
+        }
         if (!isStrictlyHigherGroup(sender, target)) {
             sender.sendMessage(getText("moderation.cannot_target_group", target.getIgn()));
             return null;
@@ -950,10 +1197,17 @@ public final class ModerationModule extends BaseModule {
         return target;
     }
 
-    private Profile requireOnlinePunishableTarget(Profile sender, String username) {
-        Profile target = requirePunishableTarget(sender, username);
+    /** Inventory inspection is allowed for the same assigned group or a lower one. */
+    private Profile requireInventoryTarget(Profile sender, String username) {
+        Profile target = requireKnownPlayer(sender, username);
         if (target == null) return null;
 
+        boolean sameOrLower = sender.getAssignedGroup() == target.getAssignedGroup()
+                || sender.getAssignedGroup().inheritsFrom(target.getAssignedGroup());
+        if (!sameOrLower) {
+            sender.sendMessage(getText("moderation.inventory.group_denied", target.getIgn()));
+            return null;
+        }
         if (!target.isOnline()) {
             sender.sendMessage(getText("moderation.player_offline", target.getIgn()));
             return null;
@@ -962,7 +1216,20 @@ public final class ModerationModule extends BaseModule {
         return target;
     }
 
-    /** Staff may alter only groups strictly below their permanent group. */
+    /** Prevents moderators from reading staff records, including their own. */
+    private boolean mayInspectStaffRecord(Profile sender, Profile target) {
+        if (!isStaff(target)) return true;
+
+        boolean allowed = sender.meetsMinimumAssignedGroup(GroupType.ADMIN)
+                && isStrictlyHigherGroup(sender, target);
+        if (!allowed) sender.sendMessage(getText("moderation.staff_record_private"));
+        return allowed;
+    }
+
+    private boolean isStaff(Profile profile) {
+        return profile != null && profile.meetsMinimumAssignedGroup(GroupType.MODERATOR);
+    }
+
     private boolean isStrictlyHigherGroup(Profile staff, Profile target) {
         return staff.getAssignedGroup() != target.getAssignedGroup()
                 && staff.getAssignedGroup().inheritsFrom(target.getAssignedGroup());
@@ -983,24 +1250,21 @@ public final class ModerationModule extends BaseModule {
             return profiles().suggestRegisteredUsernames(arguments[0], sender.getId(),
                     MAX_COMMAND_SUGGESTIONS);
         }
-
         if (arguments.length == 2) {
             List<String> suggestions = new ArrayList<>(TIMER_ACTIONS);
             suggestions.add("0");
             suggestions.addAll(COMMON_DURATIONS);
             return suggestions;
         }
-
         if (arguments.length == 3) {
             String operation = arguments[1].toLowerCase(Locale.ROOT);
             if (operation.equals("set")) {
                 List<String> suggestions = new ArrayList<>(COMMON_DURATIONS);
-                if (!label.equalsIgnoreCase("tempban")) suggestions.add("infinite");
+                if (label.equalsIgnoreCase("buildoff")) suggestions.add("infinite");
                 return suggestions;
             }
             if (operation.equals("add") || operation.equals("sub")) return COMMON_DURATIONS;
         }
-
         return List.of();
     }
 
@@ -1024,7 +1288,7 @@ public final class ModerationModule extends BaseModule {
     }
 
     // =====================================================================
-    // Small formatting helpers
+    // Formatting and records
     // =====================================================================
 
     private boolean sendUsage(Profile sender, String syntax) {
@@ -1032,14 +1296,8 @@ public final class ModerationModule extends BaseModule {
         return true;
     }
 
-    /** Returns one unformatted command-help field from the cached language data. */
     private String helpPlain(String command, String field) {
         return lang.plain("moderation.help.commands." + command + "." + field);
-    }
-
-    private static String joinArguments(String[] arguments, int firstIndex) {
-        if (arguments == null || firstIndex < 0 || firstIndex >= arguments.length) return "";
-        return String.join(" ", List.of(arguments).subList(firstIndex, arguments.length)).trim();
     }
 
     private static boolean isValidReason(String reason) {
@@ -1047,15 +1305,12 @@ public final class ModerationModule extends BaseModule {
                 && reason.indexOf('\n') < 0 && reason.indexOf('\r') < 0;
     }
 
-    private static String normalizeCommandLabel(String label) {
-        if (label == null) return "";
-        String normalized = label.trim().toLowerCase(Locale.ROOT);
-        return normalized.startsWith("/") ? normalized.substring(1) : normalized;
-    }
-
-    /** Prevents staff-entered text from becoming MiniMessage markup. */
-    private static String escapeMiniMessage(String value) {
-        return value == null ? "" : value.replace("\\", "\\\\").replace("<", "\\<");
+    private static int parsePositivePage(String input) {
+        try {
+            return Integer.parseInt(input);
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private String resolveStaffName(int staffId) {
@@ -1064,37 +1319,38 @@ public final class ModerationModule extends BaseModule {
         return staff == null || staff.getIgn() == null ? "#" + staffId : staff.getIgn();
     }
 
-    private static int asInt(Object value) {
-        return value instanceof Number number ? number.intValue() : 0;
-    }
+    private String formatModerationDuration(Duration duration) {
+        long seconds = Math.max(0L, duration == null ? 0L : duration.getSeconds());
+        if (seconds > 0L && seconds < 60L) {
+            return lang.plain("moderation.punishment.less_than_minute");
+        }
 
-    private static Boolean asBoolean(Object value) {
-        if (value == null) return null;
-        if (value instanceof Boolean booleanValue) return booleanValue;
-        if (value instanceof Number number) return number.intValue() != 0;
-        return Boolean.parseBoolean(value.toString());
-    }
+        long roundedMinutes = (seconds + 59L) / 60L;
+        long weeks = roundedMinutes / 10_080L;
+        roundedMinutes %= 10_080L;
+        long days = roundedMinutes / 1_440L;
+        roundedMinutes %= 1_440L;
+        long hours = roundedMinutes / 60L;
+        long minutes = roundedMinutes % 60L;
+        List<String> parts = new ArrayList<>();
 
-    private static LocalDateTime readNullableDateTime(Object value) {
-        if (value == null) return null;
-        if (value instanceof LocalDateTime dateTime) return dateTime.withNano(0);
-        if (value instanceof Timestamp timestamp) return timestamp.toLocalDateTime().withNano(0);
-        return LocalDateTime.parse(value.toString().replace(' ', 'T')).withNano(0);
+        if (weeks > 0) parts.add(weeks + "w");
+        if (days > 0) parts.add(days + "d");
+        if (hours > 0) parts.add(hours + "h");
+        if (minutes > 0 || parts.isEmpty()) parts.add(minutes + "m");
+        return String.join(" ", parts);
     }
 
     private static String formatDatabaseDate(Object value) {
-        if (value == null) return "-";
-
-        try {
-            LocalDateTime dateTime = readNullableDateTime(value);
-            return dateTime == null ? "-" : formatDateTime(dateTime);
-        } catch (DateTimeException exception) {
-            return String.valueOf(value);
-        }
+        return DateTimeUtils.formatDatabaseDate(value, STAFF_DATE_TIME, "-");
     }
 
     private static String formatDateTime(LocalDateTime dateTime) {
         return dateTime == null ? "-" : dateTime.format(STAFF_DATE_TIME);
+    }
+
+    private static LocalDateTime now() {
+        return LocalDateTime.now().withNano(0);
     }
 
     private static Map<String, HelpEntry> createHelpEntries() {
@@ -1119,24 +1375,64 @@ public final class ModerationModule extends BaseModule {
     }
 
     private enum Punishment {
-        MUTE("mute", "mute", "Mute", true),
-        JAIL("jail", "jail", "Jail", true),
-        BUILDOFF("buildoff", "buildoff", "Marked", true),
-        TEMPBAN("tempban", "tempban", "Temporary ban", false);
+        MUTE("mute", "mute", "Mute", false, false),
+        JAIL("jail", "jail", "Jail", false, false),
+        BUILDOFF("buildoff", "buildoff", "Marked", true, true),
+        TEMPBAN("tempban", "tempban", "Temporary ban", false, true);
 
         private final String commandLabel;
         private final String timerKey;
         private final String displayName;
         private final boolean allowsIndefinite;
+        private final boolean staffEmergency;
 
         Punishment(String commandLabel, String timerKey, String displayName,
-                boolean allowsIndefinite) {
+                boolean allowsIndefinite, boolean staffEmergency) {
             this.commandLabel = commandLabel;
             this.timerKey = timerKey;
             this.displayName = displayName;
             this.allowsIndefinite = allowsIndefinite;
+            this.staffEmergency = staffEmergency;
         }
     }
 
     private record HelpEntry(String label, Material icon) {}
+
+    private record PriusSummary(int warnings, int mutes, int jails, int buildoffs,
+            int tempbans, int permanentBans, int kicks, int notes) {
+
+        private static PriusSummary from(List<Map<String, Object>> rows) {
+            int warnings = 0;
+            int mutes = 0;
+            int jails = 0;
+            int buildoffs = 0;
+            int tempbans = 0;
+            int permanentBans = 0;
+            int kicks = 0;
+            int notes = 0;
+
+            for (Map<String, Object> row : rows) {
+                String entryClass = String.valueOf(row.get("entry_class"));
+                String entryType = String.valueOf(row.get("entry_type"));
+                String action = String.valueOf(row.get("entry_action"));
+
+                if (entryClass.equalsIgnoreCase("warning")) warnings++;
+                if (entryClass.equalsIgnoreCase("note")) notes++;
+                if (entryType.equalsIgnoreCase("kick")) kicks++;
+                if (!action.equalsIgnoreCase("set")) continue;
+
+                switch (entryType.toLowerCase(Locale.ROOT)) {
+                    case "mute" -> mutes++;
+                    case "jail" -> jails++;
+                    case "buildoff" -> buildoffs++;
+                    case "tempban" -> tempbans++;
+                    case "ban" -> permanentBans++;
+                    default -> { }
+                }
+            }
+
+            return new PriusSummary(warnings, mutes, jails, buildoffs, tempbans,
+                    permanentBans, kicks, notes);
+        }
+    }
 }

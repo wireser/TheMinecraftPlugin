@@ -52,12 +52,21 @@ public final class TextComponentParser {
     }
 
     @NotNull
-	public static Component toComponent(@NotNull String input) {
+    public static Component toComponent(@NotNull String input) {
         if (input.isEmpty()) {
             return Component.empty();
         }
         String mini = toMiniMessageSyntax(input);
         return MINI_MESSAGE.deserialize(mini);
+    }
+
+    /**
+     * Escapes untrusted text before inserting it into a MiniMessage template.
+     * Staff reasons and database text must remain prose, never formatting tags.
+     */
+    @NotNull
+    public static String escapeMiniMessage(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("<", "\\<");
     }
 
     @NotNull

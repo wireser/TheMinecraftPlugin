@@ -20,11 +20,12 @@ import model.Group;
  */
 public enum GroupType {
 
+    /** Lowest access bucket, displayed to players as the temporary Marked state. */
     PUNISHED(
         0,
-        "Punished",
+        "Marked",
         "",
-        "#555555",
+        "#AA00AA",
         null
     ),
 
