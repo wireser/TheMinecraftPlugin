@@ -10,6 +10,7 @@ import org.bukkit.configuration.file.FileConfiguration;
 import java.nio.charset.Charset;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -44,6 +45,7 @@ public final class Database {
     private DatabaseStatus status = DatabaseStatus.UNKNOWN;
     private int watchdogTaskId = -1;
     private int consecutiveFailures = 0;
+    private final AtomicBoolean watchdogCheckInProgress = new AtomicBoolean(false);
 
     private DatabaseStateListener stateListener;
 
@@ -357,38 +359,79 @@ public final class Database {
                 "MaxConsecutiveFailures out of range (%d). Clamped to %d."
         );
 
-        watchdogTaskId = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
-
-            boolean alive = isAlive();
-            DatabaseStatus newStatus = alive ? DatabaseStatus.UP : DatabaseStatus.DOWN;
-
-            if (alive) {
-                if (status == DatabaseStatus.DOWN) {
-                    logger.info("Database connection recovered.");
-                }
-                consecutiveFailures = 0;
-            } else {
-                consecutiveFailures++;
-                logger.warning("Database health check failed. Consecutive failures: " + consecutiveFailures);
-
-                if (failFast && consecutiveFailures >= maxFailures) {
-                    logger.severe("Database appears to be down permanently. Disabling plugin (fail-fast).");
-                    try {
-                        shutdown();
-                    } catch (Exception ex) {
-                        logger.log(Level.SEVERE, "Error while shutting down database during fail-fast.", ex);
+        watchdogTaskId = plugin.getServer().getScheduler().runTaskTimerAsynchronously(
+                plugin,
+                () -> {
+                    if (!watchdogCheckInProgress.compareAndSet(false, true)) {
+                        return;
                     }
-                    plugin.getServer().getPluginManager().disablePlugin(plugin);
-                    updateStatus(DatabaseStatus.DOWN);
-                    return;
-                }
-            }
 
-            if (newStatus != status) {
-                updateStatus(newStatus);
-            }
+                    boolean alive;
+                    try {
+                        alive = isAlive();
+                    } finally {
+                        watchdogCheckInProgress.set(false);
+                    }
 
-        }, intervalTicks, intervalTicks).getTaskId();
+                    if (watchdogTaskId == -1 || !plugin.isEnabled()) {
+                        return;
+                    }
+
+                    final boolean healthCheckPassed = alive;
+                    plugin.getServer().getScheduler().runTask(
+                            plugin,
+                            () -> handleWatchdogResult(
+                                    healthCheckPassed,
+                                    failFast,
+                                    maxFailures
+                            )
+                    );
+                },
+                intervalTicks,
+                intervalTicks
+        ).getTaskId();
+    }
+
+    /**
+     * Applies one completed asynchronous health check on the server thread.
+     *
+     * <p>The JDBC probe itself must never run on the primary server thread.
+     * State transitions and plugin lifecycle operations stay synchronous so
+     * Bukkit-facing callbacks remain thread-safe.</p>
+     */
+    private void handleWatchdogResult(boolean alive, boolean failFast, int maxFailures) {
+        if (watchdogTaskId == -1 || !plugin.isEnabled()) {
+            return;
+        }
+
+        DatabaseStatus newStatus = alive ? DatabaseStatus.UP : DatabaseStatus.DOWN;
+
+        if (alive) {
+            if (status == DatabaseStatus.DOWN) {
+                logger.info("Database connection recovered.");
+            }
+            consecutiveFailures = 0;
+        } else {
+            consecutiveFailures++;
+            logger.warning(
+                    "Database health check failed. Consecutive failures: "
+                            + consecutiveFailures
+            );
+
+            if (failFast && consecutiveFailures >= maxFailures) {
+                logger.severe(
+                        "Database appears to be down permanently. "
+                                + "Disabling plugin (fail-fast)."
+                );
+                updateStatus(DatabaseStatus.DOWN);
+                plugin.getServer().getPluginManager().disablePlugin(plugin);
+                return;
+            }
+        }
+
+        if (newStatus != status) {
+            updateStatus(newStatus);
+        }
     }
 
     /**
