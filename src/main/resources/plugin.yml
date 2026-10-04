@@ -6,7 +6,7 @@ website: www.theminecraftplugin.com
 
 # SYSTEM
 version: ${project.version}
-main: main.Main
+main: com.wireser.minecraft.TheMinecraftPlugin
 load: POSTWORLD
 api-version: '26.3'
 prefix: TheMinecraftPlugin
