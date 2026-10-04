@@ -1,0 +1,55 @@
+package com.wireser.minecraft.listeners.player;
+
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerQuitEvent;
+
+import com.wireser.minecraft.TheMinecraftPlugin;
+import com.wireser.minecraft.playerdata.Profile;
+import com.wireser.minecraft.playerdata.ProfileManager;
+
+/**
+ * Handles plugin cleanup when a player disconnects.
+ *
+ * <p>The player's online {@code Profile} is removed from the
+ * {@link ProfileManager} cache so that session-specific cached data does not
+ * remain in memory after the player leaves.</p>
+ *
+ * <p>This listener does not delete persistent player data.</p>
+ */
+public final class PlayerQuit implements Listener {
+
+    /**
+     * Removes the player's live profile from memory.
+     *
+     * @param event Bukkit quit event
+     */
+    @EventHandler(priority = EventPriority.LOW)
+    public void Main(PlayerQuitEvent event) {
+        Player player = event.getPlayer();
+
+        TheMinecraftPlugin plugin = TheMinecraftPlugin.getInstance();
+
+        if (plugin == null) {
+            return;
+        }
+
+        ProfileManager profileManager =
+                plugin.getProfileManager();
+
+        if (profileManager == null) {
+            return;
+        }
+
+        Profile profile = profileManager.resolveOnline(player);
+
+        if (profile != null) {
+            plugin.getModuleManager().notifyProfileUnloaded(profile);
+        }
+
+        profileManager.deleteOnlineProfile(player);
+    }
+
+}
