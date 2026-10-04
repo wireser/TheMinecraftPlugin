@@ -50,7 +50,7 @@ It’s ideal for testing, experimenting, and helping the project grow by reporti
 ![GitHub license](https://img.shields.io/github/license/wireser/TheMinecraftPlugin)  
   
 Available versions (newest → oldest):
-- **v1.0.0** — • [2025-11-14 - PaperMC 1.21.10] • [Download](https://wireser.com/jars/TMP/TheMinecraftPlugin-1.0.0.jar) • [Changelog](./changelog/v1.0.0.txt) •
+- **v9.0.0** — • [2026-10-04 - PaperMC 26.3] • [Download](https://wireser.com/jars/TMP/TheMinecraftPlugin-9.0.0.jar) • [Changelog](./changelog/v9.0.0.txt) •
 > [!NOTE]
 > Changelog files live in `./changelog/` — each version has its own file.
 
