@@ -54,6 +54,8 @@ Available versions (newest → oldest):
 > [!NOTE]
 > Changelog files live in `./changelog/` — each version has its own file.
 
+The public GitHub repository began during the TMP 9.x generation. Earlier TMP generations predate this repository.
+
 ---
 
 ## 🌐 Links
@@ -116,40 +118,64 @@ Even small donations mean a lot — they help cover hosting costs, testing setup
 
 ## ⚖️ Friendly License & Usage Terms
 
-TheMinecraftPlugin is shared openly so people can learn from it, use it, and build on it — but it also needs clear boundaries to protect the project, the contributors, and the work that goes into it.
+TheMinecraftPlugin is free and open-source software licensed under the **GNU General Public License v3.0 or later (GPL-3.0-or-later)**.
 
-These guidelines exist to keep things fair for everyone.
+The project is shared openly so people can use it, learn from it, improve it, and contribute back — while making sure that redistributed versions stay open and the original work is not misrepresented.
+
+These guidelines are a plain-language summary.  
+The full legal terms are available in the [`LICENSE`](./LICENSE) file.
 
 ### ✔️ Allowed
 You are welcome to:
 - Use this plugin on any server, including monetized servers  
 - Modify the plugin for your own server or personal experiments  
 - Learn from the codebase  
+- Fork the project and develop your own changes  
 - Build addons, extensions, or integrations  
 - Contribute fixes, improvements, or new ideas  
-- Share the plugin with others, as long as proper credit remains intact  
+- Redistribute the plugin or modified versions in accordance with the GPL  
+- Charge money for distribution, support, hosting, or other services where permitted by the GPL  
 
-### ❌ Not Allowed
-To protect the project and its contributors, you may **not**:
-- Claim the plugin, its code, or its features as your own work  
-- Rebrand, rename, or re-upload it as a separate project  
-- Sell the plugin itself, or include it inside a paid plugin/service  
-- Package or reuse parts of the code in commercial products  
-- Sell features **powered directly by this plugin** (e.g., selling access to features it provides out-of-the-box)  
+### 📖 If You Redistribute or Modify It
+If you distribute TheMinecraftPlugin or a modified version, the GPL requires you to:
+- Keep the applicable copyright and license notices intact  
+- Make the corresponding source code available  
+- Clearly indicate when you have modified the original software  
+- License the covered work under the same GPL terms  
+- Provide recipients with the same freedoms to use, inspect, modify, and redistribute the software  
+
+This means someone can fork and improve the project, but they cannot take GPL-covered code, close the source, and redistribute it as proprietary software.
+
+### ❌ Please Don't Misrepresent the Project
+The GPL gives broad rights to use, modify, and redistribute the software, but it does **not** mean someone else created the original project.
+
+Please do not:
+- Claim original TheMinecraftPlugin code as your own work  
+- Remove or deliberately misrepresent copyright or license information  
+- Present an unofficial fork as an official TheMinecraftPlugin release  
+- Impersonate the official project, its developer, or its distribution channels  
+
+The **TheMinecraftPlugin**, **wireser**, and related project branding, website, and official releases remain associated with the original project and are not automatically granted for unrestricted branding use by the GPL.
 
 > [!IMPORTANT]
-> This is not meant to restrict normal server monetization.  
-> Things like donor ranks, cosmetics, or perks from other plugins are perfectly fine.  
-> The restriction applies only to reselling *this* plugin or the features *created by this plugin*.
+> Normal Minecraft server monetization is completely fine.  
+> Things like donor ranks, cosmetics, subscriptions, server access, or other monetized server features are not restricted simply because TheMinecraftPlugin is installed.
+
+### 🧩 Contributions
+Contributions are welcome and encouraged.
+
+By submitting code, documentation, or other work to the official TheMinecraftPlugin project, you agree that your contribution may be distributed as part of the project under the same **GPL-3.0-or-later** license.
+
+This keeps the project open, collaborative, and available for future users and contributors.
+
+### 📜 Full License
+The complete license text is available in the [`LICENSE`](./LICENSE) file.
+
+TheMinecraftPlugin is licensed under the **GNU General Public License v3.0 or later**.
 
 ### 🤝 Special Circumstances
 If you have a use that falls outside these rules — commercial integrations, custom distributions, large-scale network usage, or anything unique — just reach out.  
 I try to be flexible, and most reasonable requests can be discussed.
-
-### 🧩 Contributions
-By contributing code, documentation, or other work, you agree that your contribution becomes part of the project under these same terms unless we discuss something different beforehand.
-
-This keeps the project consistent, legally safe, and fair to everyone involved.
 
 ## ✨ Thank You
 > For anyone who gives this project a chance — you’re part of the reason it keeps moving.
