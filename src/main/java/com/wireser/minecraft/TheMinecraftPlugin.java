@@ -65,7 +65,7 @@ public final class TheMinecraftPlugin extends JavaPlugin
      *
      * <p>The singleton exists primarily for legacy/static access from parts of
      * the codebase that are not yet constructor-injected. It is assigned during
-     * {@link #onEnable()} and cleared during {@link #onDisable()} so callers do
+     * {@link #onLoad()} and cleared during {@link #onDisable()} so callers do
      * not retain a stale plugin instance after shutdown.</p>
      */
     private static TheMinecraftPlugin instance;
