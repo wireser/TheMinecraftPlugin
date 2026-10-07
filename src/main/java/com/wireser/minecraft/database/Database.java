@@ -34,7 +34,7 @@ public final class Database {
     private static final int WATCHDOG_INTERVAL_MAX_TICKS = 24_000;  // 20 minutes
 
     private static final int WATCHDOG_FAILURES_MIN = 1;
-    private static final int WATCHDOG_FAILURES_MAX = 600;           // "only" ~30–60 minutes, not 7 hours of pain
+    private static final int WATCHDOG_FAILURES_MAX = 600;           // ~30–60 minutes
 
     private final TheMinecraftPlugin plugin;
     private final ConfigManager configManager;

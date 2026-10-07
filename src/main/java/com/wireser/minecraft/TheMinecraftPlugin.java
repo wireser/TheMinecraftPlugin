@@ -5,6 +5,7 @@ import java.util.List;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import org.apache.logging.log4j.Level;
@@ -13,6 +14,24 @@ import com.wireser.minecraft.command.CommandCentral;
 import com.wireser.minecraft.command.CoreModerationCommands;
 import com.wireser.minecraft.database.Database;
 import com.wireser.minecraft.database.DatabaseAccess;
+import com.wireser.minecraft.listeners.block.BlockBreak;
+import com.wireser.minecraft.listeners.block.BlockPlace;
+import com.wireser.minecraft.listeners.entity.EntityDamageByEntity;
+import com.wireser.minecraft.listeners.entity.EntityDeath;
+import com.wireser.minecraft.listeners.entity.EntityPickupItem;
+import com.wireser.minecraft.listeners.inventory.InventoryClick;
+import com.wireser.minecraft.listeners.inventory.InventoryClose;
+import com.wireser.minecraft.listeners.inventory.InventoryDrag;
+import com.wireser.minecraft.listeners.player.PlayerAsyncChat;
+import com.wireser.minecraft.listeners.player.PlayerAsyncPreLogin;
+import com.wireser.minecraft.listeners.player.PlayerCommandSend;
+import com.wireser.minecraft.listeners.player.PlayerDropItem;
+import com.wireser.minecraft.listeners.player.PlayerInteract;
+import com.wireser.minecraft.listeners.player.PlayerInteractAtEntity;
+import com.wireser.minecraft.listeners.player.PlayerJoin;
+import com.wireser.minecraft.listeners.player.PlayerQuit;
+import com.wireser.minecraft.listeners.player.PlayerRespawn;
+
 import com.wireser.minecraft.managers.ConfigManager;
 import com.wireser.minecraft.managers.LanguageManager;
 import com.wireser.minecraft.managers.ModuleManager;
@@ -35,7 +54,7 @@ import com.wireser.minecraft.playerdata.ProfileStorage;
  * database connection, command routing, and a watchdog that
  * monitors database connectivity in real-time.
  */
-public class TheMinecraftPlugin extends JavaPlugin
+public final class TheMinecraftPlugin extends JavaPlugin
 {
 
 	/** Singleton instance of this plugin. */
@@ -67,6 +86,8 @@ public class TheMinecraftPlugin extends JavaPlugin
 
 	/** Storage helper for all profile-related persistence. */
     private ProfileStorage profileStorage;
+    
+    private PluginManager pluginManager;
 
     @Override
     public void onLoad() {
@@ -84,6 +105,8 @@ public class TheMinecraftPlugin extends JavaPlugin
 
 		instance = this;
 
+		pluginManager = getServer().getPluginManager();
+		
 		// Config
         configMain = new ConfigManager(this, "config");
         configMain.setup();
@@ -106,106 +129,8 @@ public class TheMinecraftPlugin extends JavaPlugin
 		coreModerationCommands.registerCommands();
 		coreModerationCommands.synchronizePermanentBans();
 
-		moduleManager = new ModuleManager(database);
-
-        // Register modules here
-		moduleManager.registerModule(new TimersModule());
-		moduleManager.registerModule(new ModerationModule());
-		moduleManager.registerModule(new PlayersModule());
-		moduleManager.registerModule(new LocationsModule());
-		moduleManager.registerModule(new EconomyModule());
-		moduleManager.registerModule(new MenusModule());
-
-        // Load + enable in dependency order
-		registerModules();
-		moduleManager.bootstrapModules();
-		moduleManager.startScheduler();
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.player.PlayerAsyncPreLogin(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.player.PlayerJoin(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.player.PlayerQuit(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.entity.EntityDeath(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.player.PlayerRespawn(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.inventory.InventoryClick(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.inventory.InventoryDrag(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.inventory.InventoryClose(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.player.PlayerAsyncChat(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.player.PlayerCommandSend(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.block.BlockBreak(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.block.BlockPlace(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.player.PlayerInteract(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.player.PlayerInteractAtEntity(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.player.PlayerDropItem(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.entity.EntityPickupItem(),
-		        this
-		);
-
-		getServer().getPluginManager().registerEvents(
-		        new com.wireser.minecraft.listeners.entity.EntityDamageByEntity(),
-		        this
-		);
-
+		initializeModules();
+		registerEventListeners();
 	}
 
 	/**
@@ -234,10 +159,50 @@ public class TheMinecraftPlugin extends JavaPlugin
 			database.shutdown();
 		}
 
+		instance = null;
+		
 		getLogger().info("Plugin disabled.");
 
 	}
 
+	private void initializeModules() {
+		moduleManager = new ModuleManager(database);
+
+		moduleManager.registerModule(new TimersModule());
+		moduleManager.registerModule(new ModerationModule());
+		moduleManager.registerModule(new PlayersModule());
+		moduleManager.registerModule(new LocationsModule());
+		moduleManager.registerModule(new EconomyModule());
+		moduleManager.registerModule(new MenusModule());
+
+        // Load + enable in dependency order
+		moduleManager.bootstrapModules();
+		moduleManager.startScheduler();
+	}
+	
+	private void registerEventListeners() {
+		pluginManager.registerEvents(new PlayerAsyncPreLogin(), this);
+		pluginManager.registerEvents(new PlayerJoin(), this);
+		pluginManager.registerEvents(new PlayerQuit(), this);
+		pluginManager.registerEvents(new PlayerRespawn(), this);
+		pluginManager.registerEvents(new PlayerAsyncChat(), this);
+		pluginManager.registerEvents(new PlayerCommandSend(), this);
+		pluginManager.registerEvents(new PlayerInteract(), this);
+		pluginManager.registerEvents(new PlayerInteractAtEntity(), this);
+		pluginManager.registerEvents(new PlayerDropItem(), this);
+
+		pluginManager.registerEvents(new InventoryClick(), this);
+		pluginManager.registerEvents(new InventoryDrag(), this);
+		pluginManager.registerEvents(new InventoryClose(), this);
+
+		pluginManager.registerEvents(new BlockBreak(), this);
+		pluginManager.registerEvents(new BlockPlace(), this);
+
+		pluginManager.registerEvents(new EntityDeath(), this);
+		pluginManager.registerEvents(new EntityPickupItem(), this);
+		pluginManager.registerEvents(new EntityDamageByEntity(), this);
+	}
+	
 	/**
 	 * Command routing entry point.
 	 * <p>
@@ -253,11 +218,12 @@ public class TheMinecraftPlugin extends JavaPlugin
 	@Override
 	public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
 
-	    if (commandCentral == null) {
+		if (commandCentral == null || profileManager == null) {
 	        sender.sendMessage("Commands are not yet available.");
 	        return true;
 	    }
 
+		/** TODO - Re-house check into Command Central with new attribute and nullable player profiles **/
 	    if (!(sender instanceof Player player)) {
 	        sender.sendMessage("This command can only be used by players.");
 	        return true;
@@ -285,7 +251,6 @@ public class TheMinecraftPlugin extends JavaPlugin
 
         return commandCentral.complete(profile, command, alias, arguments);
     }
-
 
 	/**
 	 * @return the active plugin instance
@@ -347,28 +312,6 @@ public class TheMinecraftPlugin extends JavaPlugin
 		return commandCentral;
 	}
 
-	/**
-	 * Registers all plugin modules.
-	 * <p>
-	 * Stub method — extend this to add module initialization.
-	 */
-	private void registerModules() {
-		// moduleManager.registerModule(new EmptyModule());
-	}
-
-    /*private void muteHikariLoggers() {
-        try {
-            // Base package logger
-            Configurator.setLevel("com.wireser.minecraft.shaded.hikari", Level.OFF);
-
-            // The two specific noisy ones shown in console
-            Configurator.setLevel("com.wireser.minecraft.shaded.hikari.HikariDataSource", Level.OFF);
-            Configurator.setLevel("com.wireser.minecraft.shaded.hikari.pool.HikariPool", Level.OFF);
-        } catch (Throwable t) {
-            getLogger().warning("Could not adjust Hikari logger levels via Log4j2. This only affects cosmetic startup logs.");
-        }
-    }*/
-
     private void muteHikariLoggers() {
         try {
             Configurator.setLevel(
@@ -382,9 +325,5 @@ public class TheMinecraftPlugin extends JavaPlugin
             );
         }
     }
-
-	public DatabaseAccess getDatabaseAccess() {
-		return databaseAccess;
-	}
 
 }
