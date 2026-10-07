@@ -46,6 +46,7 @@ import com.wireser.minecraft.modules.TimersModule;
 import com.wireser.minecraft.playerdata.Profile;
 import com.wireser.minecraft.playerdata.ProfileManager;
 import com.wireser.minecraft.playerdata.ProfileStorage;
+import com.wireser.minecraft.utils.PluginLogger;
 
 /**
  * Main Paper entry point for TheMinecraftPlugin.
@@ -125,6 +126,8 @@ public final class TheMinecraftPlugin extends JavaPlugin
      */
     @Override
     public void onLoad() {
+        instance = this;
+        PluginLogger.configure(this);
         muteHikariLoggers();
     }
 
@@ -138,8 +141,6 @@ public final class TheMinecraftPlugin extends JavaPlugin
      */
     @Override
     public void onEnable() {
-
-        instance = this;
 
         pluginManager = getServer().getPluginManager();
 
