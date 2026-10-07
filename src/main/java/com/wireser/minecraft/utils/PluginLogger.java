@@ -7,34 +7,35 @@ import org.slf4j.Logger;
 import com.wireser.minecraft.TheMinecraftPlugin;
 
 /**
- * Small static logging facade for TheMinecraftPlugin.
+ * Static logging facade for TheMinecraftPlugin.
  *
- * <p>The facade keeps plugin logging consistent without requiring every caller
- * to keep its own plugin or logger reference. The Paper-provided SLF4J logger
- * is captured once through {@link #configure(TheMinecraftPlugin)} during plugin
- * load and reused by all later calls.</p>
+ * <p>This utility exposes the Paper-provided SLF4J logger through a small,
+ * consistent API that can be used from ordinary classes and static utility
+ * code without repeatedly resolving the plugin instance.</p>
  *
- * <p>Messages may use SLF4J placeholders:</p>
+ * <p>The logger is configured once during plugin load with
+ * {@link #configure(TheMinecraftPlugin)}. After that, all logging methods reuse
+ * the cached SLF4J logger.</p>
+ *
+ * <p>SLF4J placeholders are supported:</p>
  *
  * <pre>{@code
  * PluginLogger.info("Loaded {} profiles.", count);
- * PluginLogger.warn("[Moderation] Player {} was already jailed.", playerId);
+ * PluginLogger.warn("Database", "Player {} was not found.", playerId);
  * }</pre>
  *
- * <p>Error logging is intentionally available in three forms:</p>
+ * <p>Error logging is intentionally split into three forms:</p>
  *
  * <ul>
- *     <li>{@link #error(String, Object...)} for errors without an exception,</li>
- *     <li>{@link #errorReduced(Throwable, String, Object...)} for a compact
- *         one-line exception summary, and</li>
- *     <li>{@link #errorFull(Throwable, String, Object...)} for the complete
- *         exception stack trace.</li>
+ *     <li>{@link #error(String, Object...)} logs an error without an exception.</li>
+ *     <li>{@link #errorReduced(Throwable, String, Object...)} logs a compact,
+ *         single-line summary of an exception.</li>
+ *     <li>{@link #errorFull(Throwable, String, Object...)} logs the complete
+ *         exception with its full stack trace.</li>
  * </ul>
  *
- * <p>Debug output is controlled by a plugin-owned runtime switch. When enabled,
- * debug messages are forwarded at INFO level with a {@code [DEBUG]} marker so
- * they remain visible even when the server's logging backend suppresses native
- * SLF4J DEBUG output.</p>
+ * <p>{@link #fatal(String, Object...)} is reserved for unrecoverable failures.
+ * It logs the message and disables the plugin immediately.</p>
  */
 public final class PluginLogger {
 
@@ -47,10 +48,10 @@ public final class PluginLogger {
     }
 
     /**
-     * Configures the logging facade from the active plugin instance.
+     * Configures the logging facade for the active plugin instance.
      *
-     * <p>This method should be called once from the plugin load lifecycle before
-     * any other {@code PluginLogger} method is used.</p>
+     * <p>This method must be called once during plugin load before any other
+     * logging method is used.</p>
      *
      * @param pluginInstance active plugin instance
      * @throws NullPointerException if {@code pluginInstance} is {@code null}
@@ -68,9 +69,13 @@ public final class PluginLogger {
     }
 
     /**
-     * Enables or disables runtime debug logging.
+     * Enables or disables plugin-controlled debug output.
      *
-     * @param enabled {@code true} to show debug messages
+     * <p>Debug messages are emitted at INFO level with a {@code [DEBUG]} marker
+     * so this switch, rather than the server's global SLF4J level, determines
+     * whether TMP debug output is visible.</p>
+     *
+     * @param enabled {@code true} to enable debug logging; {@code false} to disable it
      */
     public static void setDebugEnabled(boolean enabled) {
         debugEnabled = enabled;
@@ -78,20 +83,16 @@ public final class PluginLogger {
     }
 
     /**
-     * Returns whether runtime debug logging is currently enabled.
+     * Returns whether plugin-controlled debug output is currently enabled.
      *
-     * @return current debug state
+     * @return {@code true} when debug messages are enabled
      */
     public static boolean isDebugEnabled() {
         return debugEnabled;
     }
 
     /**
-     * Logs a debug message when runtime debugging is enabled.
-     *
-     * <p>The message is intentionally forwarded at INFO level with a
-     * {@code [DEBUG]} marker so the plugin's own runtime switch fully controls
-     * whether the message is visible.</p>
+     * Logs a debug message when plugin-controlled debug output is enabled.
      *
      * @param message SLF4J message template
      * @param arguments values for {@code {}} placeholders
@@ -105,6 +106,20 @@ public final class PluginLogger {
     }
 
     /**
+     * Logs a prefixed debug message when plugin-controlled debug output is enabled.
+     *
+     * <p>For example, prefix {@code "Database"} produces
+     * {@code [DEBUG] [Database] ...}.</p>
+     *
+     * @param prefix logical subsystem or feature name
+     * @param message SLF4J message template
+     * @param arguments values for {@code {}} placeholders
+     */
+    public static void debug(String prefix, String message, Object... arguments) {
+        debug(prefixed(prefix, message), arguments);
+    }
+
+    /**
      * Logs an informational message.
      *
      * @param message SLF4J message template
@@ -112,6 +127,17 @@ public final class PluginLogger {
      */
     public static void info(String message, Object... arguments) {
         logger().info(message, arguments);
+    }
+
+    /**
+     * Logs a prefixed informational message.
+     *
+     * @param prefix logical subsystem or feature name
+     * @param message SLF4J message template
+     * @param arguments values for {@code {}} placeholders
+     */
+    public static void info(String prefix, String message, Object... arguments) {
+        info(prefixed(prefix, message), arguments);
     }
 
     /**
@@ -125,6 +151,17 @@ public final class PluginLogger {
     }
 
     /**
+     * Logs a prefixed warning message.
+     *
+     * @param prefix logical subsystem or feature name
+     * @param message SLF4J message template
+     * @param arguments values for {@code {}} placeholders
+     */
+    public static void warn(String prefix, String message, Object... arguments) {
+        warn(prefixed(prefix, message), arguments);
+    }
+
+    /**
      * Logs an error without attaching an exception.
      *
      * @param message SLF4J message template
@@ -135,13 +172,24 @@ public final class PluginLogger {
     }
 
     /**
-     * Logs an error with a compact single-line exception summary.
+     * Logs a prefixed error without attaching an exception.
      *
-     * <p>The complete stack trace is intentionally not printed. The summary
-     * contains the root exception type, exception message, and the first stack
-     * frame belonging to this plugin when available.</p>
+     * @param prefix logical subsystem or feature name
+     * @param message SLF4J message template
+     * @param arguments values for {@code {}} placeholders
+     */
+    public static void error(String prefix, String message, Object... arguments) {
+        error(prefixed(prefix, message), arguments);
+    }
+
+    /**
+     * Logs an error with a compact, single-line exception summary.
      *
-     * @param throwable exception associated with the error, may be {@code null}
+     * <p>The full stack trace is deliberately omitted. The summary contains the
+     * deepest exception type, its message, and the first stack frame belonging
+     * to TMP when available.</p>
+     *
+     * @param throwable exception associated with the error; may be {@code null}
      * @param message SLF4J message template
      * @param arguments values for {@code {}} placeholders
      */
@@ -157,15 +205,34 @@ public final class PluginLogger {
     }
 
     /**
-     * Logs an error and attaches the complete exception stack trace.
+     * Logs a prefixed error with a compact, single-line exception summary.
      *
-     * <p>Use this when the full call chain is required for diagnosis. Prefer
-     * {@link #errorReduced(Throwable, String, Object...)} for repetitive paths
-     * such as database polling where full stack traces would flood the log.</p>
+     * @param prefix logical subsystem or feature name
+     * @param throwable exception associated with the error; may be {@code null}
+     * @param message SLF4J message template
+     * @param arguments values for {@code {}} placeholders
+     */
+    public static void errorReduced(
+            String prefix,
+            Throwable throwable,
+            String message,
+            Object... arguments
+    ) {
+        errorReduced(throwable, prefixed(prefix, message), arguments);
+    }
+
+    /**
+     * Logs an error with the complete exception stack trace.
+     *
+     * <p>Use this form when the complete call chain is needed for diagnosis.
+     * For repetitive operations such as database polling, prefer
+     * {@link #errorReduced(Throwable, String, Object...)} to avoid flooding the
+     * console and log files.</p>
      *
      * @param throwable exception associated with the error
      * @param message SLF4J message template
      * @param arguments values for {@code {}} placeholders
+     * @throws NullPointerException if {@code throwable} is {@code null}
      */
     public static void errorFull(
             Throwable throwable,
@@ -181,16 +248,34 @@ public final class PluginLogger {
     }
 
     /**
-     * Logs a fatal error and immediately disables the plugin.
+     * Logs a prefixed error with the complete exception stack trace.
      *
-     * <p>A trailing {@link Throwable} may be supplied in {@code arguments};
-     * SLF4J will treat it as the attached exception and print its full stack
-     * trace. This method is reserved for unrecoverable failures where the
-     * plugin must not continue operating.</p>
+     * @param prefix logical subsystem or feature name
+     * @param throwable exception associated with the error
+     * @param message SLF4J message template
+     * @param arguments values for {@code {}} placeholders
+     * @throws NullPointerException if {@code throwable} is {@code null}
+     */
+    public static void errorFull(
+            String prefix,
+            Throwable throwable,
+            String message,
+            Object... arguments
+    ) {
+        errorFull(throwable, prefixed(prefix, message), arguments);
+    }
+
+    /**
+     * Logs an unrecoverable failure and disables the plugin immediately.
+     *
+     * <p>If the final item in {@code arguments} is a {@link Throwable}, SLF4J
+     * treats it as the attached exception and prints its full stack trace.</p>
+     *
+     * <p>This method should only be used when continuing to run the plugin would
+     * be unsafe or invalid.</p>
      *
      * @param message SLF4J message template
-     * @param arguments values for {@code {}} placeholders and optionally a
-     *                  trailing exception
+     * @param arguments values for {@code {}} placeholders and optionally a trailing exception
      */
     public static void fatal(String message, Object... arguments) {
         logger().error("[FATAL] " + message, arguments);
@@ -198,22 +283,33 @@ public final class PluginLogger {
     }
 
     /**
-     * Builds a compact diagnostic description of an exception.
+     * Logs a prefixed unrecoverable failure and disables the plugin immediately.
+     *
+     * @param prefix logical subsystem or feature name
+     * @param message SLF4J message template
+     * @param arguments values for {@code {}} placeholders and optionally a trailing exception
+     */
+    public static void fatal(String prefix, String message, Object... arguments) {
+        fatal(prefixed(prefix, message), arguments);
+    }
+
+    /**
+     * Creates a compact diagnostic description of an exception.
      *
      * <p>The deepest cause is used when the supplied exception wraps another
-     * failure. The first stack frame inside {@code com.wireser.minecraft} is
-     * preferred so the summary points to plugin code instead of library
+     * failure. The first stack frame within {@code com.wireser.minecraft} is
+     * preferred so the result points to TMP code rather than third-party
      * internals.</p>
      *
-     * <p>Example:</p>
+     * <p>Example result:</p>
      *
      * <pre>{@code
      * NullPointerException: profile was null
      * @ com.wireser.minecraft.modules.ModerationModule.sendPlayerToJail(ModerationModule.java:184)
      * }</pre>
      *
-     * @param throwable exception to summarize, may be {@code null}
-     * @return compact exception description
+     * @param throwable exception to summarize; may be {@code null}
+     * @return compact one-line exception description
      */
     public static String summarize(Throwable throwable) {
         if (throwable == null) {
@@ -247,6 +343,12 @@ public final class PluginLogger {
         return summary.toString();
     }
 
+    /**
+     * Returns the configured SLF4J logger.
+     *
+     * @return configured logger
+     * @throws IllegalStateException if {@link #configure(TheMinecraftPlugin)} has not been called
+     */
     private static Logger logger() {
         if (logger == null) {
             throw new IllegalStateException("PluginLogger has not been configured.");
@@ -255,6 +357,12 @@ public final class PluginLogger {
         return logger;
     }
 
+    /**
+     * Returns the configured plugin instance used for fatal shutdown.
+     *
+     * @return configured plugin instance
+     * @throws IllegalStateException if {@link #configure(TheMinecraftPlugin)} has not been called
+     */
     private static TheMinecraftPlugin plugin() {
         if (plugin == null) {
             throw new IllegalStateException("PluginLogger has not been configured.");
@@ -263,6 +371,32 @@ public final class PluginLogger {
         return plugin;
     }
 
+    /**
+     * Prepends a normalized subsystem prefix to a message.
+     *
+     * @param prefix logical subsystem or feature name
+     * @param message message to prefix
+     * @return message in the form {@code [Prefix] message}
+     * @throws NullPointerException if either argument is {@code null}
+     * @throws IllegalArgumentException if {@code prefix} is blank
+     */
+    private static String prefixed(String prefix, String message) {
+        Objects.requireNonNull(prefix, "prefix");
+        Objects.requireNonNull(message, "message");
+
+        if (prefix.isBlank()) {
+            throw new IllegalArgumentException("Log prefix cannot be blank.");
+        }
+
+        return "[" + prefix + "] " + message;
+    }
+
+    /**
+     * Returns the deepest cause in an exception chain.
+     *
+     * @param throwable starting exception
+     * @return deepest reachable cause
+     */
     private static Throwable rootCause(Throwable throwable) {
         Throwable current = throwable;
 
@@ -273,6 +407,15 @@ public final class PluginLogger {
         return current;
     }
 
+    /**
+     * Finds the most useful stack frame for a reduced exception message.
+     *
+     * <p>A TMP frame is preferred. If none exists, the first available frame is
+     * returned.</p>
+     *
+     * @param throwable exception whose stack trace should be inspected
+     * @return preferred stack frame, or {@code null} when no frame exists
+     */
     private static StackTraceElement relevantFrame(Throwable throwable) {
         StackTraceElement[] trace = throwable.getStackTrace();
 
@@ -285,6 +428,18 @@ public final class PluginLogger {
         return trace.length == 0 ? null : trace[0];
     }
 
+    /**
+     * Appends one value to an argument array.
+     *
+     * <p>This helper remains private because it currently exists only to attach
+     * reduced exception summaries or full throwables to SLF4J argument arrays.
+     * It should move to a shared array utility only if another independent TMP
+     * caller needs the same operation.</p>
+     *
+     * @param arguments original arguments
+     * @param value value to append
+     * @return new array containing all original arguments followed by {@code value}
+     */
     private static Object[] append(Object[] arguments, Object value) {
         Object[] result = new Object[arguments.length + 1];
 
