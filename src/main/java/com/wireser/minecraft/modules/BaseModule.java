@@ -448,7 +448,7 @@ public abstract class BaseModule {
      * Database access helper (wrapper, not raw Hikari / Connection).
      */
     public com.wireser.minecraft.database.DatabaseAccess getDB() {
-        return plugin.getDatabaseAccess();
+        return plugin.db();
     }
 
     // --- Profile / player access ---
