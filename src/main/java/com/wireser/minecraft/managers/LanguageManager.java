@@ -26,7 +26,7 @@ public interface LanguageManager {
      * Returns a formatted language message as an Adventure component.
      *
      * @param key language key
-     * @param arguments values replacing %1, %2, and so on
+     * @param arguments literal values or Adventure components replacing %1, %2, and so on
      * @return resolved message
      */
     @NotNull
