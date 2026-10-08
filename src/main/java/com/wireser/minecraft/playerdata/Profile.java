@@ -23,6 +23,7 @@ import com.wireser.minecraft.enums.Perm;
 import com.wireser.minecraft.model.Group;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import com.wireser.minecraft.utils.Validator;
 
@@ -69,6 +70,8 @@ import com.wireser.minecraft.utils.Validator;
  * for every feature in the plugin.</p>
  */
 public final class Profile {
+
+    private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
 
     // ======================================================================
     // Persistence
@@ -401,7 +404,7 @@ public final class Profile {
      */
     public Component getDisplayName() {
         if (nick != null && !nick.isBlank()) {
-            return TextComponentParser.toComponent(nick);
+            return MINI_MESSAGE.deserialize(nick);
         }
 
         return getNameComponent();
