@@ -560,7 +560,7 @@ public final class ModerationModule extends BaseModule {
             return true;
         }
 
-        target.sendMessageIfOnline(getText("moderation.warn.received", escapeMiniMessage(reason)));
+        target.sendMessageIfOnline(getText("moderation.warn.received", reason));
         sender.sendMessage(getText(target.isOnline()
                 ? "moderation.warn.sent_online"
                 : "moderation.warn.saved_offline", target.getIgn()));
@@ -630,7 +630,7 @@ public final class ModerationModule extends BaseModule {
             return true;
         }
 
-        target.getPlayer().kick(getText("moderation.kick.disconnect", escapeMiniMessage(reason)));
+        target.getPlayer().kick(getText("moderation.kick.disconnect", reason));
         sender.sendMessage(getText("moderation.kick.completed", target.getIgn()));
         return true;
     }
@@ -831,7 +831,7 @@ public final class ModerationModule extends BaseModule {
                 sender.sendMessage(getText("moderation.punishment.active_timed", target.getIgn(),
                         punishment.displayName, formatDateTime(timer.expiresAt()),
                         formatModerationDuration(timer.remainingAt(now())),
-                        escapeMiniMessage(findCurrentPunishmentReason(target.getId(), punishment))));
+                        findCurrentPunishmentReason(target.getId(), punishment)));
             }
         } catch (SQLException exception) {
             logError("Failed to inspect " + punishment.timerKey
@@ -918,7 +918,7 @@ public final class ModerationModule extends BaseModule {
                 sender.sendMessage(getText("moderation.punishment.ended", target.getIgn(),
                         punishment.displayName));
                 target.sendMessageIfOnline(getText("moderation.punishment.removed_target",
-                        punishment.displayName, escapeMiniMessage(reason)));
+                        punishment.displayName, reason));
             } else {
                 sender.sendMessage(getText("moderation.punishment.changed", target.getIgn(),
                         punishment.displayName, operation, formattedDuration,
@@ -960,7 +960,7 @@ public final class ModerationModule extends BaseModule {
             sender.sendMessage(getText("moderation.punishment.removed", target.getIgn(),
                     punishment.displayName));
             target.sendMessageIfOnline(getText("moderation.punishment.removed_target",
-                    punishment.displayName, escapeMiniMessage(reason)));
+                    punishment.displayName, reason));
             announceStaffEmergency(sender, target, punishment, "off", "ended", reason);
         } catch (SQLException exception) {
             handlePunishmentDatabaseFailure(sender, target, punishment, exception);
@@ -999,14 +999,14 @@ public final class ModerationModule extends BaseModule {
 
         if (timer.isIndefinite()) {
             target.sendMessage(getText("moderation.punishment.active_target_indefinite",
-                    punishment.displayName, escapeMiniMessage(reason)));
+                    punishment.displayName, reason));
             return;
         }
 
         Duration fullSentence = Duration.between(timer.startedAt(), timer.expiresAt());
         target.sendMessage(getText("moderation.punishment.active_target", punishment.displayName,
                 formatModerationDuration(fullSentence), formatDateTime(timer.expiresAt()),
-                escapeMiniMessage(reason)));
+                reason));
     }
 
     /** Sends one line per currently active punishment after login. */
@@ -1124,7 +1124,7 @@ public final class ModerationModule extends BaseModule {
 
         String alert = lang.plain("moderation.staff_emergency.alert", sender.getIgn(),
                 target.getIgn(), punishment.displayName, operation, duration,
-                escapeMiniMessage(reason));
+                reason);
         logWarning(alert);
 
         for (Profile staff : profiles().getOnlineProfiles()) {
@@ -1132,7 +1132,7 @@ public final class ModerationModule extends BaseModule {
                     || !staff.meetsMinimumAssignedGroup(GroupType.SENIOR_MODERATOR)) continue;
             staff.sendMessage(getText("moderation.staff_emergency.alert", sender.getIgn(),
                     target.getIgn(), punishment.displayName, operation, duration,
-                    escapeMiniMessage(reason)));
+                    reason));
         }
     }
 
