@@ -33,7 +33,10 @@ public final class Validator {
     /* Minecraft account names contain 3-16 ASCII letters, numbers or underscores. */
     private static final Pattern MINECRAFT_USERNAME = Pattern.compile("[A-Za-z0-9_]{3,16}");
 
-    private static final Pattern NICKNAME_COLOR_CODE = Pattern.compile("(?i)(?:&#[0-9a-f]{6}|&[0-9a-fr])");
+    private static final String NICKNAME_NAMED_COLORS =
+            "black|dark_blue|dark_green|dark_aqua|dark_red|dark_purple|gold|gray|dark_gray|blue|green|aqua|red|light_purple|yellow|white|reset";
+    private static final Pattern NICKNAME_COLOR_CODE = Pattern.compile(
+            "(?i)(?:<#[0-9a-f]{6}>|<(?:" + NICKNAME_NAMED_COLORS + ")>)");
 
     private Validator() {
         throw new UnsupportedOperationException("Validator cannot be instantiated.");
@@ -152,7 +155,7 @@ public final class Validator {
 
         boolean containsFormatting = !visibleNickname.equals(nickname);
         if (formattingLevel == NicknameFormattingLevel.PLAIN && containsFormatting) return false;
-        if (formattingLevel == NicknameFormattingLevel.LEGACY_COLORS
+        if (formattingLevel == NicknameFormattingLevel.NAMED_COLORS
                 && rgbColorPattern.matcher(nickname).find()) return false;
 
         return true;
@@ -185,7 +188,7 @@ public final class Validator {
 
     /**
      * Produces the case-insensitive lookup key for a nickname. For example,
-     * {@code &cPeter}, {@code peter} and {@code PETER} all become {@code peter}.
+     * {@code <red>Peter}, {@code peter} and {@code PETER} all become {@code peter}.
      *
      * @param nickname formatted nickname
      * @return lowercase visible nickname, or {@code null} for {@code null}
