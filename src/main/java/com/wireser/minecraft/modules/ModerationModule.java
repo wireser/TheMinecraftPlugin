@@ -4,7 +4,6 @@ import static com.wireser.minecraft.utils.CommandUtils.joinArguments;
 import static com.wireser.minecraft.utils.CommandUtils.normalizeCommandLabel;
 import static com.wireser.minecraft.utils.DatabaseValueConverter.asBoolean;
 import static com.wireser.minecraft.utils.DatabaseValueConverter.asInt;
-import static com.wireser.minecraft.utils.TextComponentParser.escapeMiniMessage;
 
 import java.sql.SQLException;
 import java.time.DateTimeException;
@@ -292,8 +291,8 @@ public final class ModerationModule extends BaseModule {
             LocalDateTime expiresAt = DateTimeUtils.readNullableDateTime(row.get("expires_at"));
             if (expiresAt != null && !expiresAt.isAfter(now())) return null;
 
-            String reason = escapeMiniMessage(findCurrentPunishmentReason(
-                    playerId, Punishment.TEMPBAN));
+            String reason = findCurrentPunishmentReason(
+                    playerId, Punishment.TEMPBAN);
             if (expiresAt == null) {
                 return getText("moderation.tempban.login_indefinite", reason);
             }
@@ -499,7 +498,7 @@ public final class ModerationModule extends BaseModule {
         sender.sendMessage(getText(headerKey, formatDatabaseDate(row.get("recorded_at")),
                 typeAndAction, resolveStaffName(asInt(row.get("staff_id")))));
         sender.sendMessage(getText("moderation.prius.entry_text",
-                escapeMiniMessage(String.valueOf(row.get("entry_text")))));
+                String.valueOf(row.get("entry_text"))));
     }
 
     private Component createPriusFooter(String username, int page, int totalPages) {
@@ -599,7 +598,7 @@ public final class ModerationModule extends BaseModule {
 
             for (Map<String, Object> warning : warnings) {
                 profile.sendMessage(getText("moderation.warn.received",
-                        escapeMiniMessage(String.valueOf(warning.get("entry_text")))));
+                        String.valueOf(warning.get("entry_text"))));
                 getDB().update(PRIUS_TABLE, List.of("notified_at"), List.of(now()),
                         "id = ?", asInt(warning.get("id")));
             }
@@ -827,7 +826,7 @@ public final class ModerationModule extends BaseModule {
             } else if (timer.isIndefinite()) {
                 sender.sendMessage(getText("moderation.punishment.active_indefinite", target.getIgn(),
                         punishment.displayName,
-                        escapeMiniMessage(findCurrentPunishmentReason(target.getId(), punishment))));
+                        findCurrentPunishmentReason(target.getId(), punishment)));
             } else {
                 sender.sendMessage(getText("moderation.punishment.active_timed", target.getIgn(),
                         punishment.displayName, formatDateTime(timer.expiresAt()),
@@ -1095,8 +1094,8 @@ public final class ModerationModule extends BaseModule {
                     timers.findTimer(profile, Punishment.TEMPBAN.timerKey).orElse(null);
             if (timer == null) return;
 
-            String reason = escapeMiniMessage(findCurrentPunishmentReason(
-                    profile.getId(), Punishment.TEMPBAN));
+            String reason = findCurrentPunishmentReason(
+                    profile.getId(), Punishment.TEMPBAN);
             profile.getPlayer().kick(timer.isIndefinite()
                     ? getText("moderation.tempban.login_indefinite", reason)
                     : getText("moderation.tempban.login_timed", formatDateTime(timer.expiresAt()),
