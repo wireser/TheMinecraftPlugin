@@ -24,7 +24,6 @@ import com.wireser.minecraft.model.Group;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
-import com.wireser.minecraft.utils.TextComponentParser;
 import com.wireser.minecraft.utils.Validator;
 
 /**
