@@ -145,7 +145,7 @@ public final class CoreModerationCommands {
             recordPrius(target, sender, "ban", "set", reason);
             if (target.isOnline()) {
                 target.getPlayer().kick(language.line("core.ban.disconnect",
-                        escapeMiniMessage(reason)));
+                        reason));
             }
 
             sender.sendMessage(language.line("core.ban.completed", target.getIgn()));
