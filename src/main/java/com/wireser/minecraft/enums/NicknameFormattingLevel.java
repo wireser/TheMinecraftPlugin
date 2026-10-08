@@ -11,9 +11,9 @@ public enum NicknameFormattingLevel {
     /** No color codes are accepted. */
     PLAIN,
 
-    /** Legacy Minecraft colors ({@code &0} through {@code &f}) are accepted. */
-    LEGACY_COLORS,
+    /** Named MiniMessage colors such as {@code <green>} and {@code <dark_red>} are accepted. */
+    NAMED_COLORS,
 
-    /** Legacy colors and RGB colors in {@code &#RRGGBB} form are accepted. */
+    /** Named colors and RGB colors in {@code <#RRGGBB>} form are accepted. */
     RGB_COLORS
 }
