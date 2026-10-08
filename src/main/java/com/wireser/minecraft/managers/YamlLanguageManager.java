@@ -26,8 +26,10 @@ import org.yaml.snakeyaml.error.Mark;
 import org.yaml.snakeyaml.error.MarkedYAMLException;
 
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
+import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
-import com.wireser.minecraft.utils.TextComponentParser;
 
 /**
  * Loads scalar messages and string lists from {@code lang.yml} into memory.
@@ -38,6 +40,7 @@ import com.wireser.minecraft.utils.TextComponentParser;
 public final class YamlLanguageManager implements LanguageManager {
 
     private static final String LANGUAGE_FILE_NAME = "lang.yml";
+    private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
     private static final String LOG_PREFIX = "[Language] ";
 
     private final JavaPlugin plugin;
@@ -134,10 +137,43 @@ public final class YamlLanguageManager implements LanguageManager {
         return List.copyOf(configuredList.subList(0, returnedItems));
     }
 
-    /** Renders a raw template selected from a language list. */
+    /**
+     * Renders a raw MiniMessage template with safely inserted positional arguments.
+     *
+     * <p>Language files retain the existing {@code %1}, {@code %2}, ... syntax.
+     * Arguments are converted to MiniMessage placeholders before parsing so plain
+     * strings remain literal text and cannot inject formatting tags. Adventure
+     * {@link Component} arguments are inserted as components and retain their
+     * formatting.</p>
+     */
     @Override
     public @NotNull Component render(@NotNull String template, Object... arguments) {
-        return TextComponentParser.toComponent(applyArguments(template, arguments));
+        Objects.requireNonNull(template, "template");
+
+        if (arguments == null || arguments.length == 0) {
+            return MINI_MESSAGE.deserialize(template);
+        }
+
+        String resolvedTemplate = template;
+        TagResolver.Builder resolvers = TagResolver.builder();
+
+        for (int index = arguments.length; index >= 1; index--) {
+            String tagName = "arg" + index;
+            Object argument = arguments[index - 1];
+
+            resolvedTemplate = resolvedTemplate.replace(
+                    "%" + index,
+                    "<" + tagName + ">"
+            );
+
+            if (argument instanceof Component component) {
+                resolvers.resolver(Placeholder.component(tagName, component));
+            } else {
+                resolvers.resolver(Placeholder.unparsed(tagName, String.valueOf(argument)));
+            }
+        }
+
+        return MINI_MESSAGE.deserialize(resolvedTemplate, resolvers.build());
     }
 
     /** Copies the bundled language file into the plugin directory once. */
@@ -281,18 +317,6 @@ public final class YamlLanguageManager implements LanguageManager {
             logger.warning(LOG_PREFIX + "Missing language key: " + missingKey);
             return "<red>%" + missingKey.toUpperCase(Locale.ROOT) + "%";
         });
-    }
-
-    /** Replaces %1, %2 and later positional placeholders without overlap. */
-    private static String applyArguments(String template, Object... arguments) {
-        if (arguments == null || arguments.length == 0) return template;
-
-        String result = template;
-        for (int index = arguments.length; index >= 1; index--) {
-            String replacement = String.valueOf(arguments[index - 1]);
-            result = result.replace("%" + index, replacement);
-        }
-        return result;
     }
 
     private static boolean isValidMessage(String message) {
