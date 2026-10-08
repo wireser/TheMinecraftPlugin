@@ -2,7 +2,6 @@ package com.wireser.minecraft.command;
 
 import static com.wireser.minecraft.utils.CommandUtils.joinArguments;
 import static com.wireser.minecraft.utils.DatabaseValueConverter.asInt;
-import static com.wireser.minecraft.utils.TextComponentParser.escapeMiniMessage;
 
 import java.sql.SQLException;
 import java.time.Duration;
