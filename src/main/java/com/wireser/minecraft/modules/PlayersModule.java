@@ -45,9 +45,11 @@ public final class PlayersModule extends BaseModule {
     private static final Pattern NICKNAME_VISIBLE_TEXT = Pattern.compile(
             "[A-Za-z0-9][A-Za-z0-9._]{" + (MINIMUM_NICKNAME_LENGTH - 2) + ","
                     + (MAXIMUM_NICKNAME_LENGTH - 2) + "}[A-Za-z0-9]");
-    private static final Pattern NICKNAME_RGB_COLOR = Pattern.compile("(?i)&#[0-9a-f]{6}");
-    private static final Pattern NICKNAME_COLOR_CODE =
-            Pattern.compile("(?i)(?:&#[0-9a-f]{6}|&[0-9a-fr])");
+    private static final String NICKNAME_NAMED_COLORS =
+            "black|dark_blue|dark_green|dark_aqua|dark_red|dark_purple|gold|gray|dark_gray|blue|green|aqua|red|light_purple|yellow|white|reset";
+    private static final Pattern NICKNAME_RGB_COLOR = Pattern.compile("(?i)<#[0-9a-f]{6}>");
+    private static final Pattern NICKNAME_COLOR_CODE = Pattern.compile(
+            "(?i)(?:<#[0-9a-f]{6}>|<(?:" + NICKNAME_NAMED_COLORS + ")>)");
 
     /** Most recent account name observed during this server session. */
     private String lastJoinedUsername;
@@ -322,7 +324,7 @@ public final class PlayersModule extends BaseModule {
             if (sender.getNick() == null) {
                 sender.sendMessage(getText("players.nick.own_missing"));
             } else {
-                sender.sendMessage(getText("players.nick.own", sender.getNick()));
+                sender.sendMessage(getText("players.nick.own", sender.getDisplayName()));
             }
 
             return true;
@@ -353,7 +355,7 @@ public final class PlayersModule extends BaseModule {
         } else if (target.getNick() == null) {
             sender.sendMessage(getText("players.nick.target_missing", target.getIgn()));
         } else {
-            sender.sendMessage(getText("players.nick.target", target.getIgn(), target.getNick()));
+            sender.sendMessage(getText("players.nick.target", target.getIgn(), target.getDisplayName()));
         }
 
         return true;
@@ -456,8 +458,8 @@ public final class PlayersModule extends BaseModule {
             return true;
         }
 
-        sender.sendMessage(getText("players.nick.updated", target.getIgn(), nickname));
-        target.sendMessageIfOnline(getText("players.nick.updated_target", nickname));
+        sender.sendMessage(getText("players.nick.updated", target.getIgn(), target.getDisplayName()));
+        target.sendMessageIfOnline(getText("players.nick.updated_target", target.getDisplayName()));
 
         return true;
     }
@@ -655,10 +657,10 @@ public final class PlayersModule extends BaseModule {
         return true;
     }
 
-    /** Determines which nickname color syntax the nickname owner may use. */
+    /** Determines which MiniMessage color syntax the nickname owner may use. */
     private NicknameFormattingLevel nicknameFormattingLevel(Profile target) {
         if (target.meetsMinimumAssignedGroup(GroupType.MODERATOR)) return NicknameFormattingLevel.RGB_COLORS;
-        if (target.meetsMinimumAssignedGroup(GroupType.DONATOR)) return NicknameFormattingLevel.LEGACY_COLORS;
+        if (target.meetsMinimumAssignedGroup(GroupType.DONATOR)) return NicknameFormattingLevel.NAMED_COLORS;
         return NicknameFormattingLevel.PLAIN;
     }
 
