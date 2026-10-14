@@ -4,15 +4,15 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 
 /**
- * Utility methods for parsing numeric input and validating MySQL integer ranges.
+ * Utility methods for parsing numeric input and validating MySQL numeric ranges.
  *
  * <p>Parsing methods return {@code null} when a value cannot be converted,
  * allowing callers such as command handlers to handle invalid user input
  * without repeating exception-handling code.</p>
  *
  * <p>The {@code fits...} methods validate whether a numeric value can be stored
- * in the corresponding MySQL integer type. The overloads default to the signed
- * range unless {@code unsigned} is explicitly requested.</p>
+ * in the corresponding MySQL numeric type. Integer overloads default to the
+ * signed range unless {@code unsigned} is explicitly requested.</p>
  */
 public final class Variables {
 
@@ -312,6 +312,72 @@ public final class Variables {
         return unsigned
                 ? in(number, 0L, 4_294_967_295L)
                 : in(number, Integer.MIN_VALUE, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Determines whether a value fits in a signed MySQL {@code DECIMAL} column.
+     *
+     * <p>The value must fit within the requested precision and scale without
+     * rounding. For example, {@code DECIMAL(10,2)} accepts values from
+     * -99,999,999.99 through 99,999,999.99.</p>
+     *
+     * @param number value to check
+     * @param precision total number of digits allowed by the column
+     * @param scale number of digits allowed after the decimal point
+     * @return {@code true} when the non-null value fits the requested
+     *         {@code DECIMAL(precision, scale)}
+     * @throws IllegalArgumentException if {@code precision} is less than 1,
+     *         {@code scale} is negative, or {@code scale} is greater than
+     *         {@code precision}
+     */
+    public static boolean fitsDecimal(BigDecimal number, int precision, int scale) {
+        return fitsDecimal(number, precision, scale, false);
+    }
+
+    /**
+     * Determines whether a value fits in a MySQL {@code DECIMAL} column.
+     *
+     * <p>The value must fit within the requested precision and scale without
+     * rounding. When {@code unsigned} is {@code true}, negative values are
+     * rejected.</p>
+     *
+     * @param number value to check
+     * @param precision total number of digits allowed by the column
+     * @param scale number of digits allowed after the decimal point
+     * @param unsigned whether to reject negative values
+     * @return {@code true} when the non-null value fits the requested
+     *         {@code DECIMAL(precision, scale)}
+     * @throws IllegalArgumentException if {@code precision} is less than 1,
+     *         {@code scale} is negative, or {@code scale} is greater than
+     *         {@code precision}
+     */
+    public static boolean fitsDecimal(
+            BigDecimal number,
+            int precision,
+            int scale,
+            boolean unsigned
+    ) {
+        if (precision < 1 || scale < 0 || scale > precision) {
+            throw new IllegalArgumentException(
+                    "DECIMAL requires precision >= 1 and 0 <= scale <= precision."
+            );
+        }
+
+        if (number == null || (unsigned && number.signum() < 0)) {
+            return false;
+        }
+
+        BigDecimal normalized;
+
+        try {
+            normalized = number.setScale(scale, java.math.RoundingMode.UNNECESSARY);
+        } catch (ArithmeticException exception) {
+            return false;
+        }
+
+        int integerDigits = normalized.precision() - normalized.scale();
+
+        return integerDigits <= precision - scale;
     }
 
     /**
