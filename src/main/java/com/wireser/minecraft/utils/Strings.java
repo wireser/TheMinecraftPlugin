@@ -13,7 +13,11 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Utility methods for common text, duration, date, and display formatting.
+ * Shared text and display helpers used by TMP.
+ *
+ * <p>The class intentionally contains several small presentation-oriented helpers
+ * that predate the current module structure. Non-obvious legacy conventions are
+ * documented at the method that owns them so their behavior remains discoverable.</p>
  */
 public final class Strings {
 
@@ -96,10 +100,16 @@ public final class Strings {
     /**
      * Parses a human-readable duration such as {@code "2h 30m"} into seconds.
      *
-     * <p>{@code "forever"} and {@code "max"} return {@link Integer#MAX_VALUE}.
-     * {@code "null"}, {@code "empty"}, {@code "delete"}, and {@code "remove"}
-     * return {@code -Integer.MAX_VALUE}. Invalid or overflowing input returns
-     * {@code null}.</p>
+     * <p>TMP historically stores command-side duration intent in a single integer:
+     * {@code Integer.MAX_VALUE} means a permanent duration, while
+     * {@code -Integer.MAX_VALUE} means that an existing date/duration should be
+     * removed. The aliases {@code forever}/{@code max} and
+     * {@code null}/{@code empty}/{@code delete}/{@code remove} preserve that
+     * command contract.</p>
+     *
+     * <p>Months are treated as 30 days and years as 365 days. Invalid values and
+     * values that cannot be represented safely as an {@code int} return
+     * {@code null} instead of throwing into a command handler.</p>
      *
      * @param text duration expression
      * @return total seconds, a supported sentinel value, or {@code null}
@@ -109,10 +119,12 @@ public final class Strings {
             return null;
         }
 
+        // Positive sentinel: callers interpret this as "permanent / no expiry".
         if (text.equalsIgnoreCase("forever") || text.equalsIgnoreCase("max")) {
             return Integer.MAX_VALUE;
         }
 
+        // Negative sentinel: callers interpret this as "remove the stored date".
         if (text.equalsIgnoreCase("null")
                 || text.equalsIgnoreCase("empty")
                 || text.equalsIgnoreCase("delete")
@@ -152,12 +164,16 @@ public final class Strings {
             }
 
             try {
+                // Exact arithmetic prevents huge player input from wrapping around
+                // before we get a chance to reject it.
                 long seconds = Math.multiplyExact(amount, unitSeconds);
                 totalSeconds = Math.addExact(totalSeconds, seconds);
             } catch (ArithmeticException exception) {
                 return null;
             }
 
+            // The public contract intentionally remains Integer-based because the
+            // sentinel values above share the same return type.
             if (totalSeconds > Integer.MAX_VALUE) {
                 return null;
             }
@@ -177,7 +193,11 @@ public final class Strings {
     }
 
     /**
-     * Formats the difference between now and the supplied date.
+     * Formats the absolute difference between now and the supplied date.
+     *
+     * <p>The formatter intentionally discards whether the date is in the past or
+     * future; callers use this helper for display text such as remaining/elapsed
+     * time and provide that context themselves.</p>
      *
      * @param time target date
      * @param useCommas whether lists of three or more units should use commas
@@ -212,8 +232,9 @@ public final class Strings {
     /**
      * Formats a duration in seconds using days, hours, minutes, and seconds.
      *
-     * <p>The sign of a negative duration is ignored, matching the historic TMP
-     * display behavior.</p>
+     * <p>The sign of a negative duration is intentionally ignored. TMP uses this
+     * helper to format a magnitude; surrounding text supplies "ago", "remaining",
+     * or other direction-specific wording.</p>
      *
      * @param seconds duration in seconds
      * @return human-readable duration
@@ -233,6 +254,8 @@ public final class Strings {
      * @return human-readable duration
      */
     public static String formatSeconds(long seconds, boolean useCommas) {
+        // Math.abs(Long.MIN_VALUE) overflows back to a negative number. Saturating
+        // this one impossible-to-abs value keeps the formatter safe and predictable.
         long total = seconds == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(seconds);
 
         long days = total / 86_400;
@@ -304,6 +327,10 @@ public final class Strings {
 
     /**
      * Removes a number of characters from the end of a string.
+     *
+     * <p>This remains useful for lightweight display-building code where a loop
+     * naturally leaves a trailing delimiter (for example {@code "dog, cat, horse, "}).
+     * Invalid removal requests deliberately leave the original value unchanged.</p>
      *
      * @param amount number of characters to remove
      * @param input input string
@@ -380,7 +407,11 @@ public final class Strings {
     }
 
     /**
-     * Converts an identifier such as {@code CAVE_SPIDER} to {@code Cave Spider}.
+     * Converts enum/material-style Minecraft identifiers into display names.
+     *
+     * <p>For example, {@code CAVE_SPIDER} becomes {@code Cave Spider}. This is
+     * intended for names originating from Minecraft/API identifiers rather than
+     * arbitrary natural-language text.</p>
      *
      * @param input identifier to format
      * @return human-readable name, or the original null/empty value
@@ -437,11 +468,13 @@ public final class Strings {
     }
 
     /**
-     * Wraps text into display lines suitable for item lore and similar UI text.
+     * Wraps player-controlled text into display lines suitable for item lore.
      *
-     * <p>Existing line breaks and the historic TMP {@code @} break marker are
-     * honored. In non-strict mode the wrapper may look ahead by up to two
-     * characters for a cleaner word boundary.</p>
+     * <p>TMP historically stores longer descriptions such as warps and shops in
+     * item lore, where a single unbounded line is unreadable. Existing line breaks
+     * and the historic TMP {@code @} explicit-break marker are therefore honored.
+     * In non-strict mode the wrapper may look ahead by up to two characters for a
+     * cleaner word boundary before forcing a split.</p>
      *
      * @param input text to wrap
      * @param maxWidth preferred maximum line width
@@ -467,7 +500,10 @@ public final class Strings {
     }
 
     /**
-     * Splits text on standard line endings and the historic TMP {@code @} break marker.
+     * Splits text on standard line endings and TMP's historic {@code @} break marker.
+     *
+     * <p>The {@code @} convention is intentionally application-specific: player
+     * descriptions historically used it to request an explicit new lore line.</p>
      *
      * @param input text to split
      * @return lines in encounter order
@@ -484,6 +520,7 @@ public final class Strings {
             return lines;
         }
 
+        // Preserve TMP's long-standing in-band marker for explicit lore breaks.
         String normalized = input.replace('@', '\n');
         int lineStart = 0;
 
@@ -511,7 +548,12 @@ public final class Strings {
     }
 
     /**
-     * Wraps one logical line and appends its segments to a destination list.
+     * Wraps one logical lore line and appends its segments to a destination list.
+     *
+     * <p>Natural whitespace/hyphen breaks are preferred. When no useful break
+     * exists, strict mode forces a split at the limit; non-strict mode first looks
+     * up to two characters ahead to avoid ugly splits. Long unbroken words are
+     * hyphenated so generated lore cannot grow without bound.</p>
      *
      * @param input line to wrap
      * @param list destination list
