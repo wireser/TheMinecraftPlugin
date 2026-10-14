@@ -13,11 +13,8 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Shared text and display helpers used by TMP.
- *
- * <p>The class intentionally contains several small presentation-oriented helpers
- * that predate the current module structure. Non-obvious legacy conventions are
- * documented at the method that owns them so their behavior remains discoverable.</p>
+ * Utility methods for text sanitizing, duration parsing and formatting,
+ * date formatting, capitalization, and line wrapping.
  */
 public final class Strings {
 
@@ -98,33 +95,36 @@ public final class Strings {
     }
 
     /**
-     * Parses a human-readable duration such as {@code "2h 30m"} into seconds.
+     * Parses a human-readable duration into seconds.
      *
-     * <p>TMP historically stores command-side duration intent in a single integer:
-     * {@code Integer.MAX_VALUE} means a permanent duration, while
-     * {@code -Integer.MAX_VALUE} means that an existing date/duration should be
-     * removed. The aliases {@code forever}/{@code max} and
-     * {@code null}/{@code empty}/{@code delete}/{@code remove} preserve that
-     * command contract.</p>
+     * <p>Supported units are years ({@code y}, {@code year}, {@code years}),
+     * months ({@code mm}, {@code month}, {@code months}), days, hours, minutes,
+     * and seconds. Multiple values may be separated by whitespace, for example
+     * {@code "2h 30m"}.</p>
      *
-     * <p>Months are treated as 30 days and years as 365 days. Invalid values and
-     * values that cannot be represented safely as an {@code int} return
-     * {@code null} instead of throwing into a command handler.</p>
+     * <p>{@code forever} and {@code max} return {@link Integer#MAX_VALUE}.
+     * {@code null}, {@code empty}, {@code delete}, and {@code remove} return
+     * {@code -Integer.MAX_VALUE}. A leading minus sign negates a normal parsed
+     * duration.</p>
      *
-     * @param text duration expression
-     * @return total seconds, a supported sentinel value, or {@code null}
+     * <p>Months are defined as 30 days and years as 365 days. Invalid syntax,
+     * unknown units, numeric overflow, and totals outside the {@code int} range
+     * return {@code null}.</p>
+     *
+     * @param text duration expression to parse
+     * @return total seconds, a sentinel value, or {@code null} if parsing fails
      */
     public static Integer timeTagsToSeconds(String text) {
         if (!Validator.checkString(text)) {
             return null;
         }
 
-        // Positive sentinel: callers interpret this as "permanent / no expiry".
+        // Integer.MAX_VALUE represents a permanent duration.
         if (text.equalsIgnoreCase("forever") || text.equalsIgnoreCase("max")) {
             return Integer.MAX_VALUE;
         }
 
-        // Negative sentinel: callers interpret this as "remove the stored date".
+        // -Integer.MAX_VALUE represents removal of an existing duration/date.
         if (text.equalsIgnoreCase("null")
                 || text.equalsIgnoreCase("empty")
                 || text.equalsIgnoreCase("delete")
@@ -164,16 +164,14 @@ public final class Strings {
             }
 
             try {
-                // Exact arithmetic prevents huge player input from wrapping around
-                // before we get a chance to reject it.
+                // Reject multiplication/addition overflow instead of allowing wraparound.
                 long seconds = Math.multiplyExact(amount, unitSeconds);
                 totalSeconds = Math.addExact(totalSeconds, seconds);
             } catch (ArithmeticException exception) {
                 return null;
             }
 
-            // The public contract intentionally remains Integer-based because the
-            // sentinel values above share the same return type.
+            // Parsed durations and sentinel values share the Integer return type.
             if (totalSeconds > Integer.MAX_VALUE) {
                 return null;
             }
@@ -193,15 +191,15 @@ public final class Strings {
     }
 
     /**
-     * Formats the absolute difference between now and the supplied date.
+     * Formats the absolute difference between the current time and a target date.
      *
-     * <p>The formatter intentionally discards whether the date is in the past or
-     * future; callers use this helper for display text such as remaining/elapsed
-     * time and provide that context themselves.</p>
+     * <p>The result contains days, hours, minutes, and seconds. The direction of
+     * the difference is not included in the returned text.</p>
      *
-     * @param time target date
+     * @param time target date; must not be {@code null}
      * @param useCommas whether lists of three or more units should use commas
-     * @return human-readable duration
+     * @return human-readable absolute duration
+     * @throws NullPointerException if {@code time} is {@code null}
      */
     public static String formatDateDifference(Date time, boolean useCommas) {
         long seconds = Duration.between(Instant.now(), time.toInstant()).getSeconds();
@@ -232,9 +230,7 @@ public final class Strings {
     /**
      * Formats a duration in seconds using days, hours, minutes, and seconds.
      *
-     * <p>The sign of a negative duration is intentionally ignored. TMP uses this
-     * helper to format a magnitude; surrounding text supplies "ago", "remaining",
-     * or other direction-specific wording.</p>
+     * <p>Negative values are formatted using their absolute magnitude.</p>
      *
      * @param seconds duration in seconds
      * @return human-readable duration
@@ -246,16 +242,17 @@ public final class Strings {
     /**
      * Formats a duration in seconds using days, hours, minutes, and seconds.
      *
-     * <p>The sign of a negative duration is ignored, matching the historic TMP
-     * display behavior.</p>
+     * <p>Zero-valued units are omitted. Negative values are formatted using their
+     * absolute magnitude. With comma formatting enabled, three or more units are
+     * rendered as {@code "A, B and C"}; otherwise units are joined with
+     * {@code " and "}.</p>
      *
      * @param seconds duration in seconds
      * @param useCommas whether lists of three or more units should use commas
      * @return human-readable duration
      */
     public static String formatSeconds(long seconds, boolean useCommas) {
-        // Math.abs(Long.MIN_VALUE) overflows back to a negative number. Saturating
-        // this one impossible-to-abs value keeps the formatter safe and predictable.
+        // Math.abs(Long.MIN_VALUE) overflows, so use the largest representable magnitude.
         long total = seconds == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(seconds);
 
         long days = total / 86_400;
@@ -328,13 +325,12 @@ public final class Strings {
     /**
      * Removes a number of characters from the end of a string.
      *
-     * <p>This remains useful for lightweight display-building code where a loop
-     * naturally leaves a trailing delimiter (for example {@code "dog, cat, horse, "}).
-     * Invalid removal requests deliberately leave the original value unchanged.</p>
+     * <p>If {@code input} is {@code null}, {@code amount <= 0}, or the string is
+     * shorter than {@code amount}, the original value is returned unchanged.</p>
      *
-     * @param amount number of characters to remove
+     * @param amount number of trailing characters to remove
      * @param input input string
-     * @return shortened string, or the original value when the request is invalid
+     * @return shortened string, or the original value when removal is not possible
      */
     public static String removeLastChars(int amount, String input) {
         if (input == null || amount <= 0 || input.length() < amount) {
@@ -345,12 +341,20 @@ public final class Strings {
     }
 
     /**
-     * Inserts a marker when adding the next word would exceed the requested width.
+     * Wraps text at word boundaries by inserting a separator between lines.
+     *
+     * <p>Words are kept intact. When adding the next word would make the current
+     * line exceed {@code max}, {@code character} is inserted before that word.
+     * A single word longer than {@code max} is not split.</p>
+     *
+     * <p>If {@code input}, {@code max}, or {@code character} is invalid
+     * ({@code input == null}, {@code max == null}, {@code max <= 0}, or
+     * {@code character == null}), the original input is returned unchanged.</p>
      *
      * @param input text to wrap
-     * @param max maximum line width
-     * @param character marker inserted between wrapped lines
-     * @return wrapped text
+     * @param max maximum line width before inserting a separator
+     * @param character separator inserted between wrapped lines
+     * @return wrapped text, or the original input when parameters are invalid
      */
     public static String breakText(String input, Integer max, String character) {
         if (input == null || max == null || max <= 0 || character == null) {
@@ -407,14 +411,14 @@ public final class Strings {
     }
 
     /**
-     * Converts enum/material-style Minecraft identifiers into display names.
+     * Converts an uppercase underscore-separated identifier into a display name.
      *
-     * <p>For example, {@code CAVE_SPIDER} becomes {@code Cave Spider}. This is
-     * intended for names originating from Minecraft/API identifiers rather than
-     * arbitrary natural-language text.</p>
+     * <p>The input is converted to lowercase, underscores are replaced with spaces,
+     * and the first letter of each word is capitalized. For example,
+     * {@code CAVE_SPIDER} becomes {@code Cave Spider}.</p>
      *
      * @param input identifier to format
-     * @return human-readable name, or the original null/empty value
+     * @return formatted name, or the original value if {@code null} or empty
      */
     public static String niceName(String input) {
         if (input == null || input.isEmpty()) {
@@ -468,18 +472,19 @@ public final class Strings {
     }
 
     /**
-     * Wraps player-controlled text into display lines suitable for item lore.
+     * Wraps text into multiple display lines.
      *
-     * <p>TMP historically stores longer descriptions such as warps and shops in
-     * item lore, where a single unbounded line is unreadable. Existing line breaks
-     * and the historic TMP {@code @} explicit-break marker are therefore honored.
-     * In non-strict mode the wrapper may look ahead by up to two characters for a
-     * cleaner word boundary before forcing a split.</p>
+     * <p>Existing line breaks and {@code @} characters are treated as explicit
+     * line breaks before wrapping. Natural breaks use whitespace or hyphens.
+     * In non-strict mode the method may look ahead by up to two characters past
+     * {@code maxWidth} for a cleaner break. If no break is available, long words
+     * are split and hyphenated when possible.</p>
      *
      * @param input text to wrap
-     * @param maxWidth preferred maximum line width
-     * @param strict whether to enforce the width without forward lookahead
-     * @return wrapped lines
+     * @param maxWidth preferred maximum line width; must be greater than 0
+     * @param strict whether to disable forward lookahead past {@code maxWidth}
+     * @return wrapped lines, or an empty list when {@code input} is invalid
+     * @throws IllegalArgumentException if {@code maxWidth <= 0}
      */
     public static List<String> wrap(String input, int maxWidth, boolean strict) {
         if (!Validator.checkString(input)) {
@@ -500,10 +505,11 @@ public final class Strings {
     }
 
     /**
-     * Splits text on standard line endings and TMP's historic {@code @} break marker.
+     * Splits text into lines.
      *
-     * <p>The {@code @} convention is intentionally application-specific: player
-     * descriptions historically used it to request an explicit new lore line.</p>
+     * <p>Recognizes {@code \n}, {@code \r}, {@code \r\n}, and {@code @} as line
+     * separators. A {@code null} input returns an empty list. An empty string returns
+     * a list containing one empty string.</p>
      *
      * @param input text to split
      * @return lines in encounter order
@@ -520,7 +526,7 @@ public final class Strings {
             return lines;
         }
 
-        // Preserve TMP's long-standing in-band marker for explicit lore breaks.
+        // Treat '@' as an explicit in-band line separator.
         String normalized = input.replace('@', '\n');
         int lineStart = 0;
 
@@ -548,17 +554,21 @@ public final class Strings {
     }
 
     /**
-     * Wraps one logical lore line and appends its segments to a destination list.
+     * Wraps one logical line and appends the resulting segments to a list.
      *
-     * <p>Natural whitespace/hyphen breaks are preferred. When no useful break
-     * exists, strict mode forces a split at the limit; non-strict mode first looks
-     * up to two characters ahead to avoid ugly splits. Long unbroken words are
-     * hyphenated so generated lore cannot grow without bound.</p>
+     * <p>Whitespace and hyphens are preferred break points. If no break exists at
+     * or before {@code maxWidth}, non-strict mode searches up to two characters
+     * beyond the limit. Otherwise the line is force-split; segments longer than
+     * three characters are hyphenated at the split point.</p>
+     *
+     * <p>If {@code input} or {@code list} is {@code null}, the method returns
+     * without modifying the destination list.</p>
      *
      * @param input line to wrap
      * @param list destination list
-     * @param maxWidth preferred maximum line width
-     * @param strict whether to enforce the width without forward lookahead
+     * @param maxWidth preferred maximum line width; must be greater than 0
+     * @param strict whether to disable forward lookahead past {@code maxWidth}
+     * @throws IllegalArgumentException if {@code maxWidth <= 0}
      */
     public static void wrapLineInto(
             String input,
@@ -606,11 +616,14 @@ public final class Strings {
     }
 
     /**
-     * Finds a whitespace or hyphen break at or before the supplied position.
+     * Finds the nearest whitespace or hyphen at or before a position.
+     *
+     * <p>If {@code start} is beyond the end of the string, searching begins at the
+     * final character. {@code null} and empty input return {@code -1}.</p>
      *
      * @param input text to inspect
      * @param start starting position
-     * @return break index, or {@code -1} if none exists
+     * @return index of a valid break character, or {@code -1} if none exists
      */
     public static int findBreakBefore(String input, int start) {
         if (input == null || input.isEmpty()) {
