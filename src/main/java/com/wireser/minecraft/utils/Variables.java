@@ -1,236 +1,344 @@
 package com.wireser.minecraft.utils;
 
+import java.math.BigDecimal;
 import java.math.BigInteger;
 
-public class Variables {
+/**
+ * Utility methods for parsing numeric input and validating MySQL integer ranges.
+ *
+ * <p>Parsing methods return {@code null} when a value cannot be converted,
+ * allowing callers such as command handlers to handle invalid user input
+ * without repeating exception-handling code.</p>
+ *
+ * <p>The {@code fits...} methods validate whether a numeric value can be stored
+ * in the corresponding MySQL integer type. The overloads default to the signed
+ * range unless {@code unsigned} is explicitly requested.</p>
+ */
+public final class Variables {
 
-	private static final BigInteger UNSIGNED_BIGINT_MAX = new BigInteger("18446744073709551615");
-	
-	/**
-	 * Attempts to parse a {@code String} into an {@code Integer}.
-	 * <p>
-	 * If the input is {@code null}, empty, or not a valid integer, this method
-	 * returns {@code null} instead of throwing an exception.
-	 *
-	 * @param number the string representation of the integer
-	 * @return the parsed {@code Integer}, or {@code null} if parsing fails
-	 */
-	public static Integer forceInt(String number) {
-		if(!Validator.checkString(number))
-	        return null;
-		
-		try {
-			return Integer.parseInt(number);
-		} catch(Exception ex) {
-			return null;
-		}
-	}
+    private static final BigInteger SIGNED_BIGINT_MIN =
+            BigInteger.valueOf(Long.MIN_VALUE);
 
-	/**
-	 * Attempts to parse a {@code String} into a {@code Double}.
-	 * <p>
-	 * If the input is {@code null}, empty, or not a valid double, this method
-	 * returns {@code null} instead of throwing an exception.
-	 *
-	 * @param number the string representation of the double
-	 * @return the parsed {@code Double}, or {@code null} if parsing fails
-	 */
-	public static Double forceDouble(String number) {
-		if(!Validator.checkString(number))
-	        return null;
-		
-		try {
-			return Double.parseDouble(number);
-		} catch(Exception ex) {
-			return null;
-		}
-	}
-	
-	/**
-	 * Attempts to parse a {@code String} into a {@code Float}.
-	 * <p>
-	 * If the input is {@code null}, empty, or not a valid float, this method
-	 * returns {@code null} instead of throwing an exception.
-	 *
-	 * @param number the string representation of the float
-	 * @return the parsed {@code Float}, or {@code null} if parsing fails
-	 */
-	public static Float forceFloat(String number) {
-		if(!Validator.checkString(number))
-	        return null;
-		
-		try {
-			return Float.parseFloat(number);
-		} catch(Exception ex) {
-			return null;
-		}
-	}
-	
-	/**
-     * Checks whether a number is within a specific range (inclusive).
+    private static final BigInteger SIGNED_BIGINT_MAX =
+            BigInteger.valueOf(Long.MAX_VALUE);
+
+    private static final BigInteger UNSIGNED_BIGINT_MAX =
+            new BigInteger("18446744073709551615");
+
+    private Variables() {
+        // Utility class.
+    }
+
+    /**
+     * Attempts to parse a string as a {@link Byte}.
      *
-     * @param number the number being evaluated
-     * @param min the minimum allowed value
-     * @param max the maximum allowed value
-     * @return {@code true} if {@code number} is between {@code min} and {@code max}, otherwise {@code false}
+     * @param number numeric string to parse
+     * @return parsed value, or {@code null} if the input is null, empty,
+     *         or not a valid byte
+     */
+    public static Byte parseByteOrNull(String number) {
+        if (!Validator.checkString(number)) {
+            return null;
+        }
+
+        try {
+            return Byte.parseByte(number);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Attempts to parse a string as a {@link Short}.
+     *
+     * @param number numeric string to parse
+     * @return parsed value, or {@code null} if the input is null, empty,
+     *         or not a valid short
+     */
+    public static Short parseShortOrNull(String number) {
+        if (!Validator.checkString(number)) {
+            return null;
+        }
+
+        try {
+            return Short.parseShort(number);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Attempts to parse a string as an {@link Integer}.
+     *
+     * @param number numeric string to parse
+     * @return parsed value, or {@code null} if the input is null, empty,
+     *         or not a valid integer
+     */
+    public static Integer parseIntOrNull(String number) {
+        if (!Validator.checkString(number)) {
+            return null;
+        }
+
+        try {
+            return Integer.parseInt(number);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Attempts to parse a string as a {@link Long}.
+     *
+     * @param number numeric string to parse
+     * @return parsed value, or {@code null} if the input is null, empty,
+     *         or not a valid long
+     */
+    public static Long parseLongOrNull(String number) {
+        if (!Validator.checkString(number)) {
+            return null;
+        }
+
+        try {
+            return Long.parseLong(number);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Attempts to parse a string as a {@link Float}.
+     *
+     * <p>Non-finite values such as {@code NaN} and infinity are rejected.</p>
+     *
+     * @param number numeric string to parse
+     * @return parsed finite value, or {@code null} if the input is null,
+     *         empty, invalid, or non-finite
+     */
+    public static Float parseFloatOrNull(String number) {
+        if (!Validator.checkString(number)) {
+            return null;
+        }
+
+        try {
+            float value = Float.parseFloat(number);
+            return Float.isFinite(value) ? value : null;
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Attempts to parse a string as a {@link Double}.
+     *
+     * <p>Non-finite values such as {@code NaN} and infinity are rejected.</p>
+     *
+     * @param number numeric string to parse
+     * @return parsed finite value, or {@code null} if the input is null,
+     *         empty, invalid, or non-finite
+     */
+    public static Double parseDoubleOrNull(String number) {
+        if (!Validator.checkString(number)) {
+            return null;
+        }
+
+        try {
+            double value = Double.parseDouble(number);
+            return Double.isFinite(value) ? value : null;
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Attempts to parse a string as a {@link BigInteger}.
+     *
+     * @param number numeric string to parse
+     * @return parsed value, or {@code null} if the input is null, empty,
+     *         or not a valid integer
+     */
+    public static BigInteger parseBigIntegerOrNull(String number) {
+        if (!Validator.checkString(number)) {
+            return null;
+        }
+
+        try {
+            return new BigInteger(number);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Attempts to parse a string as a {@link BigDecimal}.
+     *
+     * <p>This is the preferred parser for exact decimal values such as money,
+     * where floating-point rounding should be avoided.</p>
+     *
+     * @param number numeric string to parse
+     * @return parsed value, or {@code null} if the input is null, empty,
+     *         or not a valid decimal number
+     */
+    public static BigDecimal parseBigDecimalOrNull(String number) {
+        if (!Validator.checkString(number)) {
+            return null;
+        }
+
+        try {
+            return new BigDecimal(number);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Checks whether a value falls within an inclusive range.
+     *
+     * @param number value to check
+     * @param min inclusive minimum
+     * @param max inclusive maximum
+     * @return {@code true} when {@code number} is within the range
      */
     private static boolean in(long number, long min, long max) {
         return number >= min && number <= max;
     }
 
-    // -------------------------------------------------
-    // TINYINT
-    // -------------------------------------------------
-
     /**
-     * Determines whether a number fits into a signed TINYINT.
-     * Signed range: -128 to 127.
+     * Checks whether a {@link BigInteger} falls within an inclusive range.
      *
-     * @param number the number to check
-     * @return {@code true} if the number fits in signed TINYINT, otherwise {@code false}
+     * @param number value to check
+     * @param min inclusive minimum
+     * @param max inclusive maximum
+     * @return {@code true} when {@code number} is non-null and within the range
      */
-    public static boolean isTinyInt(int number) {
-        return isTinyInt(number, false);
+    private static boolean in(BigInteger number, BigInteger min, BigInteger max) {
+        return number != null
+                && number.compareTo(min) >= 0
+                && number.compareTo(max) <= 0;
     }
 
     /**
-     * Determines whether a number fits into a TINYINT.
-     * Signed range: -128 to 127.
-     * Unsigned range: 0 to 255.
+     * Determines whether a value fits in a signed MySQL {@code TINYINT}.
      *
-     * @param number the number to check
-     * @param unsigned {@code true} to evaluate against the unsigned range, {@code false} for signed
-     * @return {@code true} if the number fits within the specified TINYINT range, otherwise {@code false}
+     * @param number value to check
+     * @return {@code true} for values from -128 through 127
      */
-    public static boolean isTinyInt(int number, boolean unsigned) {
+    public static boolean fitsTinyInt(int number) {
+        return fitsTinyInt(number, false);
+    }
+
+    /**
+     * Determines whether a value fits in a MySQL {@code TINYINT}.
+     *
+     * @param number value to check
+     * @param unsigned whether to use the unsigned range
+     * @return {@code true} when the value fits the selected range:
+     *         -128 through 127 signed, or 0 through 255 unsigned
+     */
+    public static boolean fitsTinyInt(int number, boolean unsigned) {
         return unsigned
                 ? in(number, 0, 255)
                 : in(number, -128, 127);
     }
 
-    // -------------------------------------------------
-    // SMALLINT
-    // -------------------------------------------------
-
     /**
-     * Determines whether a number fits into a signed SMALLINT.
-     * Signed range: -32,768 to 32,767.
+     * Determines whether a value fits in a signed MySQL {@code SMALLINT}.
      *
-     * @param number the number to check
-     * @return {@code true} if the number fits in signed SMALLINT, otherwise {@code false}
+     * @param number value to check
+     * @return {@code true} for values from -32,768 through 32,767
      */
-    public static boolean isSmallInt(int number) {
-        return isSmallInt(number, false);
+    public static boolean fitsSmallInt(int number) {
+        return fitsSmallInt(number, false);
     }
 
     /**
-     * Determines whether a number fits into a SMALLINT.
-     * Signed range: -32,768 to 32,767.
-     * Unsigned range: 0 to 65,535.
+     * Determines whether a value fits in a MySQL {@code SMALLINT}.
      *
-     * @param number the number to check
-     * @param unsigned {@code true} to evaluate against the unsigned range, {@code false} for signed
-     * @return {@code true} if the number fits within the specified SMALLINT range, otherwise {@code false}
+     * @param number value to check
+     * @param unsigned whether to use the unsigned range
+     * @return {@code true} when the value fits the selected range:
+     *         -32,768 through 32,767 signed, or 0 through 65,535 unsigned
      */
-    public static boolean isSmallInt(int number, boolean unsigned) {
+    public static boolean fitsSmallInt(int number, boolean unsigned) {
         return unsigned
-                ? in(number, 0, 65535)
-                : in(number, -32768, 32767);
-    }
-
-    // -------------------------------------------------
-    // MEDIUMINT
-    // -------------------------------------------------
-
-    /**
-     * Determines whether a number fits into a signed MEDIUMINT.
-     * Signed range: -8,388,608 to 8,388,607.
-     *
-     * @param number the number to check
-     * @return {@code true} if the number fits in signed MEDIUMINT, otherwise {@code false}
-     */
-    public static boolean isMediumInt(int number) {
-        return isMediumInt(number, false);
+                ? in(number, 0, 65_535)
+                : in(number, -32_768, 32_767);
     }
 
     /**
-     * Determines whether a number fits into a MEDIUMINT.
-     * Signed range: -8,388,608 to 8,388,607.
-     * Unsigned range: 0 to 16,777,215.
+     * Determines whether a value fits in a signed MySQL {@code MEDIUMINT}.
      *
-     * @param number the number to check
-     * @param unsigned {@code true} to evaluate against the unsigned range, {@code false} for signed
-     * @return {@code true} if the number fits within the specified MEDIUMINT range, otherwise {@code false}
+     * @param number value to check
+     * @return {@code true} for values from -8,388,608 through 8,388,607
      */
-    public static boolean isMediumInt(int number, boolean unsigned) {
+    public static boolean fitsMediumInt(int number) {
+        return fitsMediumInt(number, false);
+    }
+
+    /**
+     * Determines whether a value fits in a MySQL {@code MEDIUMINT}.
+     *
+     * @param number value to check
+     * @param unsigned whether to use the unsigned range
+     * @return {@code true} when the value fits the selected range:
+     *         -8,388,608 through 8,388,607 signed, or
+     *         0 through 16,777,215 unsigned
+     */
+    public static boolean fitsMediumInt(int number, boolean unsigned) {
         return unsigned
-                ? in(number, 0, 16777215)
-                : in(number, -8388608, 8388607);
-    }
-
-    // -------------------------------------------------
-    // INT
-    // -------------------------------------------------
-
-    /**
-     * Determines whether a number fits into a signed INT.
-     * Signed range: Integer.MIN_VALUE to Integer.MAX_VALUE.
-     *
-     * @param number the number to check
-     * @return {@code true} if the number fits in signed INT, otherwise {@code false}
-     */
-    public static boolean isInt(long number) {
-        return isInt(number, false);
+                ? in(number, 0, 16_777_215)
+                : in(number, -8_388_608, 8_388_607);
     }
 
     /**
-     * Determines whether a number fits into an INT.
-     * Signed range: Integer.MIN_VALUE to Integer.MAX_VALUE.
-     * Unsigned range: 0 to 4,294,967,295.
+     * Determines whether a value fits in a signed MySQL {@code INT}.
      *
-     * @param number the number to check
-     * @param unsigned {@code true} to evaluate against the unsigned range, {@code false} for signed
-     * @return {@code true} if the number fits within the specified INT range, otherwise {@code false}
+     * @param number value to check
+     * @return {@code true} for values from -2,147,483,648 through 2,147,483,647
      */
-    public static boolean isInt(long number, boolean unsigned) {
+    public static boolean fitsInt(long number) {
+        return fitsInt(number, false);
+    }
+
+    /**
+     * Determines whether a value fits in a MySQL {@code INT}.
+     *
+     * @param number value to check
+     * @param unsigned whether to use the unsigned range
+     * @return {@code true} when the value fits the selected range:
+     *         -2,147,483,648 through 2,147,483,647 signed, or
+     *         0 through 4,294,967,295 unsigned
+     */
+    public static boolean fitsInt(long number, boolean unsigned) {
         return unsigned
-                ? in(number, 0, 4294967295L)
+                ? in(number, 0L, 4_294_967_295L)
                 : in(number, Integer.MIN_VALUE, Integer.MAX_VALUE);
     }
 
-    // -------------------------------------------------
-    // BIGINT
-    // -------------------------------------------------
-
     /**
-     * Determines whether a number fits into a signed BIGINT.
-     * Signed BIGINT supports any value representable by Java's {@code long}.
+     * Determines whether a value fits in a signed MySQL {@code BIGINT}.
      *
-     * @param number the number to check
-     * @return always {@code true} for signed BIGINT, since {@code long} fully represents signed BIGINT
+     * @param number value to check
+     * @return {@code true} for values from -9,223,372,036,854,775,808 through
+     *         9,223,372,036,854,775,807
      */
-    public static boolean isBigInt(BigInteger number) {
-        return isBigInt(number, false);
+    public static boolean fitsBigInt(BigInteger number) {
+        return fitsBigInt(number, false);
     }
 
     /**
-     * Determines whether a number fits into a BIGINT.
-     * Signed BIGINT supports any value representable by Java's {@code long}.
-     * Unsigned BIGINT supports 0 to 18,446,744,073,709,551,615.
+     * Determines whether a value fits in a MySQL {@code BIGINT}.
      *
-     * @param number the number to check
-     * @param unsigned {@code true} to evaluate against the unsigned range, {@code false} for signed
-     * @return {@code true} if signed (always), or if {@code number} fits the unsigned BIGINT range
+     * @param number value to check
+     * @param unsigned whether to use the unsigned range
+     * @return {@code true} when the non-null value fits the selected range:
+     *         -9,223,372,036,854,775,808 through
+     *         9,223,372,036,854,775,807 signed, or
+     *         0 through 18,446,744,073,709,551,615 unsigned
      */
-    public static boolean isBigInt(BigInteger number, boolean unsigned) {
-        if (!unsigned) {
-            // signed BIGINT fits any long -> always true
-            return true;
-        }
-
-        // unsigned BIGINT: 0 to 2^64 - 1
-        return number.compareTo(BigInteger.ZERO) >= 0 &&
-               number.compareTo(UNSIGNED_BIGINT_MAX) <= 0;
+    public static boolean fitsBigInt(BigInteger number, boolean unsigned) {
+        return unsigned
+                ? in(number, BigInteger.ZERO, UNSIGNED_BIGINT_MAX)
+                : in(number, SIGNED_BIGINT_MIN, SIGNED_BIGINT_MAX);
     }
-	
+
 }
