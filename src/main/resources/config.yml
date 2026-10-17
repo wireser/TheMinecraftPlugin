@@ -172,17 +172,26 @@ Database:
 # Discord integration
 # =============================================================================
 Discord:
-  # Outbound webhook URLs used for server-to-Discord messages.
-  #
-  # Webhook URLs contain authentication tokens. Keep production values only in
-  # the server's local config.yml and never commit real webhook URLs to source
-  # control. Leave unused destinations empty.
+  # Outbound webhook destinations. An empty value disables that destination.
   Webhooks:
+    # Announcement notifications.
     Anno: ""
+
+    # General server notifications.
     General: ""
+
+    # Prius-related notifications.
     Prius: ""
+
+    # Staff support notifications.
     Support: ""
+
+    # Ticket and report notifications.
     Ticket: ""
+
+    # Server update notifications.
     Update: ""
+
+    # Live Minecraft chat relay.
     InGameChat: ""
 
