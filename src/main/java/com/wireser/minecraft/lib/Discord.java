@@ -2,296 +2,365 @@ package com.wireser.minecraft.lib;
 
 import java.awt.Color;
 import java.io.IOException;
-import java.io.OutputStream;
-import java.lang.reflect.Array;
-import java.net.URL;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
-import javax.net.ssl.HttpsURLConnection;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import com.wireser.minecraft.TheMinecraftPlugin;
+import com.wireser.minecraft.utils.PluginLogger;
 
 /**
- * Class used to execute Discord Webhooks with low effort
+ * Sends messages from the Minecraft server to configured Discord webhooks.
+ *
+ * <p>Webhook requests are sent asynchronously so Discord or network latency never
+ * blocks the Paper server thread. This class handles outbound webhook messages only;
+ * Discord-to-server communication requires a Discord bot/gateway connection.</p>
  */
-public class Discord {
+public final class Discord {
+
+    private static final String LOG_PREFIX = "Discord";
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(REQUEST_TIMEOUT)
+            .build();
 
     private final String url;
     private String content;
     private String username;
     private String avatarUrl;
     private boolean tts;
-    private List<EmbedObject> embeds = new ArrayList<>();
+    private final List<EmbedObject> embeds = new ArrayList<>();
 
-    public enum Bots {
-    	ANNO("https://discord.com/api/webhooks/1339530570799120435/K8Q3YTkptN3MmKkFU2gXZQFsAjs7T4duQ2rSXQTzmx02Kf5nqc8PA0k-VRUtPYikkZax"),
-    	GENERAL("https://discord.com/api/webhooks/1339530856041025547/jjO2BBVeqSXMuunL2HcaRjDm6qCdX0vlkqUXWbGJV8h_23dnVUvHMBBZwgEF6c_-HVU7"),
-    	PRIUS("https://discord.com/api/webhooks/1339529556272480287/hgdOQA0v5lAi4uMI9UBYXDINybwgBPodF0BbVyqweIFliUI3p1iVKFOMxcUIxjYD_027"),
-    	SUPPORT("https://discord.com/api/webhooks/1339530965336326195/B_ZzVMS96mPES4jJLxxN0Y2lI7g0gkut4GZJUwOFwzSIWVBJQxSTIyWuaCR1C0yOXEGt"),
-    	TICKET("https://discord.com/api/webhooks/1339530671395311641/iOZAOkDI_X8lAFrb66dqrvM9_uxmS41OljRi1tQYM7GEqz_9tqf3bpqepaqayGHYw4Gd"),
-    	UPDATE("https://discord.com/api/webhooks/1339530415790227508/84Zymf5mKPgxsQRqT25Mvoyzj6zLME4S7GvZTbCtjwVSjx59-1NmTfPRQj1et1fZ3ZwA"),
-
-    	IG_CHAT_MESSAGE("https://discord.com/api/webhooks/1339530496564138069/_Wk89joZbaIVcidV8dxeF6kmVNYqJKgGfthHJBLrIUcHo2U09Q-3U0K2fmXeSn1VKqyY");
-
-    	public final String value;
-
-    	Bots(String value) {
-    		this.value = value;
-    	}
-    }
-
-    public enum Colors {
-
-    	// RED
-    	MAROON(128,0,0),
-    	CRIMSON(220,20,60),
-    	TOMATO(255,99,71),
-    	CORAL(255,127,80),
-    	INDIAN_RED(205,92,92),
-    	SALMON(255,128,114),
-
-    	// YELLOW
-    	ORANGE(255,165,0),
-    	GOLD(255,215,0),
-
-    	// GREEN
-    	OLIVE(107,142,35),
-    	FOREST_GREEN(34,139,34),
-
-    	// BLUE
-    	TEAL(0,128,128),
-    	DARK_TURQUOISE(0,206,209),
-    	TURQUOISE(64,224,208),
-    	STEEL_BLUE(70,130,180),
-    	CORN_FLOWER_BLUE(100,149,237),
-    	SKY_BLUE(135,206,235),
-    	DODGER_BLUE(30,144,255),
-    	ROYAL_BLUE(65,105,225),
-
-    	// PURPLE
-    	INDIGO(75,0,130),
-    	HOT_PINK(255,105,180),
-    	PLUM(221,160,221),
-
-    	// GRAY
-    	SILVER(192,192,192);
-
-    	public final Color color;
-
-    	Colors(int r, int g, int b) {
-    		this.color = new Color(r, g, b);
-    	}
-    }
-
-    public Color rgb = new Color(0, 0, 0);
-
-    
-    public static void sendAsPlayer(Discord.Bots hook, Discord.Colors color, String sender, String title, String msg) {
-		Discord webhook = new Discord(hook.value);
-		
-		webhook.setTts(false);
-		webhook.setUsername(sender);
-		webhook.setContent(msg);
-
-		try {
-			webhook.execute();
-		}
-		
-		catch (IOException e) {
-			e.printStackTrace();
-		}
-	}
-    
-	public static void send(Discord.Bots hook, Discord.Colors color, String title, String msg) {
-		Discord webhook = new Discord(hook.value);
-		
-		webhook.setTts(true);
-		webhook.addEmbed(new Discord.EmbedObject()
-			.setDescription(msg)
-			.setTitle(title)
-			.setColor(color.color));
-		
-		try {
-			webhook.execute();
-		}
-		
-		catch (IOException e) {
-			e.printStackTrace();
-		}
-	}
-    
     /**
-     * Constructs a new DiscordWebhook instance
+     * Configured outbound Discord webhook destinations.
      *
-     * @param url The webhook URL obtained in Discord
+     * <p>The enum stores configuration paths rather than webhook credentials.
+     * The actual URLs belong in {@code config.yml} and are resolved when a
+     * message is sent.</p>
+     */
+    public enum WebhookTarget {
+        ANNO("Discord.Webhooks.Anno"),
+        GENERAL("Discord.Webhooks.General"),
+        PRIUS("Discord.Webhooks.Prius"),
+        SUPPORT("Discord.Webhooks.Support"),
+        TICKET("Discord.Webhooks.Ticket"),
+        UPDATE("Discord.Webhooks.Update"),
+        IG_CHAT_MESSAGE("Discord.Webhooks.InGameChat");
+
+        private final String configPath;
+
+        WebhookTarget(String configPath) {
+            this.configPath = configPath;
+        }
+
+        public String getConfigPath() {
+            return configPath;
+        }
+    }
+
+    /**
+     * Common Discord embed colors.
+     */
+    public enum Colors {
+        MAROON(128, 0, 0),
+        CRIMSON(220, 20, 60),
+        TOMATO(255, 99, 71),
+        CORAL(255, 127, 80),
+        INDIAN_RED(205, 92, 92),
+        SALMON(255, 128, 114),
+
+        ORANGE(255, 165, 0),
+        GOLD(255, 215, 0),
+
+        OLIVE(107, 142, 35),
+        FOREST_GREEN(34, 139, 34),
+
+        TEAL(0, 128, 128),
+        DARK_TURQUOISE(0, 206, 209),
+        TURQUOISE(64, 224, 208),
+        STEEL_BLUE(70, 130, 180),
+        CORN_FLOWER_BLUE(100, 149, 237),
+        SKY_BLUE(135, 206, 235),
+        DODGER_BLUE(30, 144, 255),
+        ROYAL_BLUE(65, 105, 225),
+
+        INDIGO(75, 0, 130),
+        HOT_PINK(255, 105, 180),
+        PLUM(221, 160, 221),
+
+        SILVER(192, 192, 192);
+
+        private final Color color;
+
+        Colors(int red, int green, int blue) {
+            this.color = new Color(red, green, blue);
+        }
+
+        public Color getColor() {
+            return color;
+        }
+    }
+
+    /**
+     * Sends a player-originated chat message to Discord.
+     *
+     * <p>The supplied title is displayed together with the player's name, while
+     * the color is used as the embed accent color. The message is sent
+     * asynchronously.</p>
+     *
+     * @param target configured webhook destination
+     * @param color embed accent color
+     * @param sender player display name
+     * @param title prefix or role label displayed before the sender
+     * @param message chat message
+     * @return future completed when Discord accepts or rejects the request
+     */
+    public static CompletableFuture<Void> sendAsPlayer(
+            WebhookTarget target,
+            Colors color,
+            String sender,
+            String title,
+            String message
+    ) {
+        Objects.requireNonNull(color, "color");
+        Objects.requireNonNull(sender, "sender");
+        Objects.requireNonNull(message, "message");
+
+        String displayName = title == null || title.isBlank()
+                ? sender
+                : title.trim() + " " + sender;
+
+        Discord webhook = fromConfig(target);
+        if (webhook == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        webhook.setTts(false);
+        webhook.addEmbed(new EmbedObject()
+                .setTitle(displayName)
+                .setDescription(message)
+                .setColor(color.getColor()));
+
+        return webhook.executeAsync();
+    }
+
+    /**
+     * Sends an embedded server notification to Discord.
+     *
+     * @param target configured webhook destination
+     * @param color embed accent color
+     * @param title embed title
+     * @param message embed body
+     * @return future completed when Discord accepts or rejects the request
+     */
+    public static CompletableFuture<Void> send(
+            WebhookTarget target,
+            Colors color,
+            String title,
+            String message
+    ) {
+        Objects.requireNonNull(color, "color");
+        Objects.requireNonNull(message, "message");
+
+        Discord webhook = fromConfig(target);
+        if (webhook == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        webhook.setTts(false);
+        webhook.addEmbed(new EmbedObject()
+                .setDescription(message)
+                .setTitle(title)
+                .setColor(color.getColor()));
+
+        return webhook.executeAsync();
+    }
+
+    /**
+     * Creates a webhook message for a Discord webhook URL.
+     *
+     * @param url Discord webhook URL
+     * @throws NullPointerException if {@code url} is {@code null}
+     * @throws IllegalArgumentException if {@code url} is blank
      */
     public Discord(String url) {
+        Objects.requireNonNull(url, "url");
+
+        if (url.isBlank()) {
+            throw new IllegalArgumentException("Discord webhook URL cannot be blank.");
+        }
+
         this.url = url;
     }
 
-    /**
-     *
-     * @param content
-     */
     public void setContent(String content) {
         this.content = content;
     }
 
-    /**
-     *
-     * @param username
-     */
     public void setUsername(String username) {
         this.username = username;
     }
 
-    /**
-     *
-     * @param avatarUrl
-     */
     public void setAvatarUrl(String avatarUrl) {
         this.avatarUrl = avatarUrl;
     }
 
-    /**
-     *
-     * @param tts
-     */
     public void setTts(boolean tts) {
         this.tts = tts;
     }
 
-    /**
-     *
-     * @param embed
-     */
     public void addEmbed(EmbedObject embed) {
-        this.embeds.add(embed);
+        embeds.add(Objects.requireNonNull(embed, "embed"));
     }
 
     /**
+     * Sends this webhook message asynchronously.
      *
-     * @throws IOException
+     * <p>The returned future completes normally only for HTTP 2xx responses.
+     * Configuration, serialization, network, and non-success HTTP failures are
+     * logged through {@link PluginLogger} and complete the future exceptionally.</p>
+     *
+     * @return future representing the webhook request
+     * @throws IllegalStateException if neither content nor an embed has been supplied
      */
-    public void execute() throws IOException {
-        if (this.content == null && this.embeds.isEmpty()) {
-            throw new IllegalArgumentException("Set content or add at least one EmbedObject");
+    public CompletableFuture<Void> executeAsync() {
+        if (content == null && embeds.isEmpty()) {
+            throw new IllegalStateException("Set content or add at least one EmbedObject.");
         }
 
-        JSONObject json = new JSONObject();
-
-        json.put("content", this.content);
-        json.put("username", this.username);
-        json.put("avatar_url", this.avatarUrl);
-        json.put("tts", this.tts);
-
-        if (!this.embeds.isEmpty()) {
-            List<JSONObject> embedObjects = new ArrayList<>();
-
-            for (EmbedObject embed : this.embeds) {
-                JSONObject jsonEmbed = new JSONObject();
-
-                jsonEmbed.put("title", embed.getTitle());
-                jsonEmbed.put("description", embed.getDescription());
-                jsonEmbed.put("url", embed.getUrl());
-
-                if (embed.getColor() != null) {
-                    Color color = embed.getColor();
-                    int rgb = color.getRed();
-                    rgb = (rgb << 8) + color.getGreen();
-                    rgb = (rgb << 8) + color.getBlue();
-
-                    jsonEmbed.put("color", rgb);
-                }
-
-                EmbedObject.Footer footer = embed.getFooter();
-                EmbedObject.Image image = embed.getImage();
-                EmbedObject.Thumbnail thumbnail = embed.getThumbnail();
-                EmbedObject.Author author = embed.getAuthor();
-                List<EmbedObject.Field> fields = embed.getFields();
-
-                if (footer != null) {
-                    JSONObject jsonFooter = new JSONObject();
-
-                    jsonFooter.put("text", footer.getText());
-                    jsonFooter.put("icon_url", footer.getIconUrl());
-                    jsonEmbed.put("footer", jsonFooter);
-                }
-
-                if (image != null) {
-                    JSONObject jsonImage = new JSONObject();
-
-                    jsonImage.put("url", image.getUrl());
-                    jsonEmbed.put("image", jsonImage);
-                }
-
-                if (thumbnail != null) {
-                    JSONObject jsonThumbnail = new JSONObject();
-
-                    jsonThumbnail.put("url", thumbnail.getUrl());
-                    jsonEmbed.put("thumbnail", jsonThumbnail);
-                }
-
-                if (author != null) {
-                    JSONObject jsonAuthor = new JSONObject();
-
-                    jsonAuthor.put("name", author.getName());
-                    jsonAuthor.put("url", author.getUrl());
-                    jsonAuthor.put("icon_url", author.getIconUrl());
-                    jsonEmbed.put("author", jsonAuthor);
-                }
-
-                List<JSONObject> jsonFields = new ArrayList<>();
-                for (EmbedObject.Field field : fields) {
-                    JSONObject jsonField = new JSONObject();
-
-                    jsonField.put("name", field.getName());
-                    jsonField.put("value", field.getValue());
-                    jsonField.put("inline", field.isInline());
-
-                    jsonFields.add(jsonField);
-                }
-
-                jsonEmbed.put("fields", jsonFields.toArray());
-                embedObjects.add(jsonEmbed);
-            }
-
-            json.put("embeds", embedObjects.toArray());
-        }
+        HttpRequest request;
 
         try {
-        	URI uri = new URI(this.url);
-            URL url = uri.toURL();
-            HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
-            connection.addRequestProperty("Content-Type", "application/json");
-            connection.addRequestProperty("User-Agent", "Java-DiscordWebhook-BY-Gelox_");
-            connection.setDoOutput(true);
-            connection.setRequestMethod("POST");
-
-            OutputStream stream = connection.getOutputStream();
-            stream.write(json.toString().getBytes(StandardCharsets.UTF_8));
-            stream.flush();
-            stream.close();
-
-            connection.getInputStream().close(); //I'm not sure why but it doesn't work without getting the InputStream
-            connection.disconnect();
+            request = HttpRequest.newBuilder(URI.create(url))
+                    .timeout(REQUEST_TIMEOUT)
+                    .header("Content-Type", "application/json")
+                    .header("User-Agent", "TheMinecraftPlugin/9")
+                    .POST(HttpRequest.BodyPublishers.ofString(createPayload().toString()))
+                    .build();
+        } catch (RuntimeException exception) {
+            PluginLogger.errorReduced(LOG_PREFIX, exception, "Could not build Discord webhook request.");
+            return CompletableFuture.failedFuture(exception);
         }
-        
-        catch(Exception ex) {
-        	//Lib.errorNoTarget("Discord", ex, "545-875-652");
+
+        return HTTP_CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                .thenCompose(response -> {
+                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                        PluginLogger.debug(LOG_PREFIX, "Webhook delivered with HTTP {}.", response.statusCode());
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    IOException exception = new IOException(
+                            "Discord returned HTTP " + response.statusCode()
+                                    + formatResponseBody(response.body())
+                    );
+
+                    PluginLogger.errorReduced(
+                            LOG_PREFIX,
+                            exception,
+                            "Discord rejected webhook request."
+                    );
+
+                    return CompletableFuture.failedFuture(exception);
+                })
+                .exceptionallyCompose(exception -> {
+                    Throwable cause = exception.getCause() == null ? exception : exception.getCause();
+
+                    if (!(cause instanceof IOException
+                            && cause.getMessage() != null
+                            && cause.getMessage().startsWith("Discord returned HTTP "))) {
+                        PluginLogger.errorReduced(
+                                LOG_PREFIX,
+                                cause,
+                                "Discord webhook request failed."
+                        );
+                    }
+
+                    return CompletableFuture.failedFuture(cause);
+                });
+    }
+
+    private JSONObject createPayload() {
+        JSONObject json = new JSONObject();
+
+        if (content != null) {
+            json.put("content", content);
         }
+        if (username != null) {
+            json.put("username", username);
+        }
+        if (avatarUrl != null) {
+            json.put("avatar_url", avatarUrl);
+        }
+
+        json.put("tts", tts);
+
+        if (!embeds.isEmpty()) {
+            JSONArray jsonEmbeds = new JSONArray();
+
+            for (EmbedObject embed : embeds) {
+                jsonEmbeds.put(embed.toJson());
+            }
+
+            json.put("embeds", jsonEmbeds);
+        }
+
+        return json;
+    }
+
+    private static Discord fromConfig(WebhookTarget target) {
+        Objects.requireNonNull(target, "target");
+
+        TheMinecraftPlugin plugin = TheMinecraftPlugin.getInstance();
+        if (plugin == null || plugin.getMainConfig() == null) {
+            PluginLogger.error(LOG_PREFIX, "Cannot send webhook before the main configuration is available.");
+            return null;
+        }
+
+        FileConfiguration config = plugin.getMainConfig().getConfig();
+        String url = config.getString(target.getConfigPath());
+
+        if (url == null || url.isBlank()) {
+            PluginLogger.warn(
+                    LOG_PREFIX,
+                    "Webhook target {} is not configured at {}.",
+                    target,
+                    target.getConfigPath()
+            );
+            return null;
+        }
+
+        return new Discord(url.trim());
+    }
+
+    private static String formatResponseBody(String body) {
+        if (body == null || body.isBlank()) {
+            return "";
+        }
+
+        String normalized = body.replaceAll("\\s+", " ").trim();
+
+        if (normalized.length() > 300) {
+            normalized = normalized.substring(0, 300) + "...";
+        }
+
+        return ": " + normalized;
     }
 
     /**
-     *
-     * @author wireser
-     *
+     * Mutable builder for a Discord embed object.
      */
-    public static class EmbedObject {
+    public static final class EmbedObject {
+
         private String title;
         private String description;
         private String url;
@@ -301,7 +370,7 @@ public class Discord {
         private Thumbnail thumbnail;
         private Image image;
         private Author author;
-        private List<Field> fields = new ArrayList<>();
+        private final List<Field> fields = new ArrayList<>();
 
         public String getTitle() {
             return title;
@@ -336,7 +405,7 @@ public class Discord {
         }
 
         public List<Field> getFields() {
-            return fields;
+            return List.copyOf(fields);
         }
 
         public EmbedObject setTitle(String title) {
@@ -384,52 +453,111 @@ public class Discord {
             return this;
         }
 
-        private class Footer {
-            private String text;
-            private String iconUrl;
+        private JSONObject toJson() {
+            JSONObject json = new JSONObject();
+
+            if (title != null) {
+                json.put("title", title);
+            }
+            if (description != null) {
+                json.put("description", description);
+            }
+            if (url != null) {
+                json.put("url", url);
+            }
+            if (color != null) {
+                json.put("color", color.getRGB() & 0x00FFFFFF);
+            }
+            if (footer != null) {
+                json.put("footer", footer.toJson());
+            }
+            if (image != null) {
+                json.put("image", image.toJson());
+            }
+            if (thumbnail != null) {
+                json.put("thumbnail", thumbnail.toJson());
+            }
+            if (author != null) {
+                json.put("author", author.toJson());
+            }
+            if (!fields.isEmpty()) {
+                JSONArray jsonFields = new JSONArray();
+
+                for (Field field : fields) {
+                    jsonFields.put(field.toJson());
+                }
+
+                json.put("fields", jsonFields);
+            }
+
+            return json;
+        }
+
+        public static final class Footer {
+            private final String text;
+            private final String iconUrl;
 
             private Footer(String text, String iconUrl) {
                 this.text = text;
                 this.iconUrl = iconUrl;
             }
 
-            private String getText() {
+            public String getText() {
                 return text;
             }
 
-            private String getIconUrl() {
+            public String getIconUrl() {
                 return iconUrl;
+            }
+
+            private JSONObject toJson() {
+                JSONObject json = new JSONObject();
+                json.put("text", text);
+
+                if (iconUrl != null) {
+                    json.put("icon_url", iconUrl);
+                }
+
+                return json;
             }
         }
 
-        private class Thumbnail {
-            private String url;
+        public static final class Thumbnail {
+            private final String url;
 
             private Thumbnail(String url) {
                 this.url = url;
             }
 
-            private String getUrl() {
+            public String getUrl() {
                 return url;
+            }
+
+            private JSONObject toJson() {
+                return new JSONObject().put("url", url);
             }
         }
 
-        private class Image {
-            private String url;
+        public static final class Image {
+            private final String url;
 
             private Image(String url) {
                 this.url = url;
             }
 
-            private String getUrl() {
+            public String getUrl() {
                 return url;
+            }
+
+            private JSONObject toJson() {
+                return new JSONObject().put("url", url);
             }
         }
 
-        private class Author {
-            private String name;
-            private String url;
-            private String iconUrl;
+        public static final class Author {
+            private final String name;
+            private final String url;
+            private final String iconUrl;
 
             private Author(String name, String url, String iconUrl) {
                 this.name = name;
@@ -437,23 +565,37 @@ public class Discord {
                 this.iconUrl = iconUrl;
             }
 
-            private String getName() {
+            public String getName() {
                 return name;
             }
 
-            private String getUrl() {
+            public String getUrl() {
                 return url;
             }
 
-            private String getIconUrl() {
+            public String getIconUrl() {
                 return iconUrl;
+            }
+
+            private JSONObject toJson() {
+                JSONObject json = new JSONObject();
+                json.put("name", name);
+
+                if (url != null) {
+                    json.put("url", url);
+                }
+                if (iconUrl != null) {
+                    json.put("icon_url", iconUrl);
+                }
+
+                return json;
             }
         }
 
-        private class Field {
-            private String name;
-            private String value;
-            private boolean inline;
+        public static final class Field {
+            private final String name;
+            private final String value;
+            private final boolean inline;
 
             private Field(String name, String value, boolean inline) {
                 this.name = name;
@@ -461,72 +603,24 @@ public class Discord {
                 this.inline = inline;
             }
 
-            private String getName() {
+            public String getName() {
                 return name;
             }
 
-            private String getValue() {
+            public String getValue() {
                 return value;
             }
 
-            private boolean isInline() {
+            public boolean isInline() {
                 return inline;
             }
-        }
-    }
 
-    /**
-     *
-     * @author wireser
-     *
-     */
-    private class JSONObject {
-
-        private final HashMap<String, Object> map = new HashMap<>();
-
-        void put(String key, Object value) {
-            if (value != null) {
-                map.put(key, value);
+            private JSONObject toJson() {
+                return new JSONObject()
+                        .put("name", name)
+                        .put("value", value)
+                        .put("inline", inline);
             }
         }
-
-        @Override
-        public String toString() {
-            StringBuilder builder = new StringBuilder();
-            Set<Map.Entry<String, Object>> entrySet = map.entrySet();
-            builder.append("{");
-
-            int i = 0;
-            for (Map.Entry<String, Object> entry : entrySet) {
-                Object val = entry.getValue();
-                builder.append(quote(entry.getKey())).append(":");
-
-                if (val instanceof String) {
-                    builder.append(quote(String.valueOf(val)));
-                } else if (val instanceof Integer) {
-                    builder.append(Integer.valueOf(String.valueOf(val)));
-                } else if (val instanceof Boolean) {
-                    builder.append(val);
-                } else if (val instanceof JSONObject) {
-                    builder.append(val.toString());
-                } else if (val.getClass().isArray()) {
-                    builder.append("[");
-                    int len = Array.getLength(val);
-                    for (int j = 0; j < len; j++) {
-                        builder.append(Array.get(val, j).toString()).append(j != len - 1 ? "," : "");
-                    }
-                    builder.append("]");
-                }
-
-                builder.append(++i == entrySet.size() ? "}" : ",");
-            }
-
-            return builder.toString();
-        }
-
-        private String quote(String string) {
-            return "\"" + string + "\"";
-        }
     }
-
 }
