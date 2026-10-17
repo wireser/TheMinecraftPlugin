@@ -172,6 +172,33 @@ Database:
 # Discord integration
 # =============================================================================
 Discord:
+  # Maximum duration of a Discord connection/request.
+  RequestTimeoutMs: 10000
+
+  Retry:
+    # Total attempts for chat and standard notifications.
+    DefaultMaxAttempts: 4
+
+    # Total attempts for support and ticket notifications.
+    ImportantMaxAttempts: 6
+
+    # Backoff after consecutive network or Discord 5xx failures.
+    # Further retries continue using the final value.
+    DelaysMs:
+      - 1000
+      - 2000
+      - 5000
+
+  Queues:
+    # Maximum pending standard notifications per webhook target.
+    DefaultLimit: 250
+
+    # Maximum pending live-chat messages.
+    ChatLimit: 500
+
+    # Maximum pending support/ticket notifications per webhook target.
+    ImportantLimit: 1000
+
   # Outbound webhook destinations. An empty value disables that destination.
   Webhooks:
     # Announcement notifications.
