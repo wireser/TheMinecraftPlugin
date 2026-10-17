@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 import org.bukkit.configuration.file.FileConfiguration;
 import org.json.JSONArray;
@@ -112,33 +113,22 @@ public final class Discord {
     }
 
     /**
-     * Sends a player-originated chat message to Discord.
+     * Sends a fully formatted player chat line to Discord as normal webhook content.
      *
-     * <p>The supplied title is displayed together with the player's name, while
-     * the color is used as the embed accent color. The message is sent
-     * asynchronously.</p>
+     * <p>The method does not add a player name, prefix, color, or embed formatting.
+     * The caller supplies the complete Discord message, including any Discord
+     * Markdown used for rank or player-name styling.</p>
      *
      * @param target configured webhook destination
-     * @param color embed accent color
-     * @param sender player display name
-     * @param title prefix or role label displayed before the sender
-     * @param message chat message
+     * @param message complete chat line to send
      * @return future completed when Discord accepts or rejects the request
+     * @throws NullPointerException if {@code target} or {@code message} is {@code null}
      */
     public static CompletableFuture<Void> sendAsPlayer(
             WebhookTarget target,
-            Colors color,
-            String sender,
-            String title,
             String message
     ) {
-        Objects.requireNonNull(color, "color");
-        Objects.requireNonNull(sender, "sender");
         Objects.requireNonNull(message, "message");
-
-        String displayName = title == null || title.isBlank()
-                ? sender
-                : title.trim() + " " + sender;
 
         Discord webhook = fromConfig(target);
         if (webhook == null) {
@@ -146,10 +136,7 @@ public final class Discord {
         }
 
         webhook.setTts(false);
-        webhook.addEmbed(new EmbedObject()
-                .setTitle(displayName)
-                .setDescription(message)
-                .setColor(color.getColor()));
+        webhook.setContent(message);
 
         return webhook.executeAsync();
     }
@@ -241,10 +228,21 @@ public final class Discord {
         HttpRequest request;
 
         try {
-            request = HttpRequest.newBuilder(URI.create(url))
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(URI.create(url))
                     .timeout(REQUEST_TIMEOUT)
-                    .header("Content-Type", "application/json")
-                    .header("User-Agent", "TheMinecraftPlugin/9")
+                    .header("Content-Type", "application/json");
+
+            TheMinecraftPlugin plugin = TheMinecraftPlugin.getInstance();
+            if (plugin != null) {
+                requestBuilder.header(
+                        "User-Agent",
+                        plugin.getPluginMeta().getName()
+                                + "/"
+                                + plugin.getPluginMeta().getVersion()
+                );
+            }
+
+            request = requestBuilder
                     .POST(HttpRequest.BodyPublishers.ofString(createPayload().toString()))
                     .build();
         } catch (RuntimeException exception) {
@@ -253,39 +251,28 @@ public final class Discord {
         }
 
         return HTTP_CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-                .thenCompose(response -> {
-                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        PluginLogger.debug(LOG_PREFIX, "Webhook delivered with HTTP {}.", response.statusCode());
-                        return CompletableFuture.completedFuture(null);
+                .thenAccept(response -> {
+                    if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                        throw new CompletionException(new IOException(
+                                "Discord returned HTTP " + response.statusCode()
+                                        + formatResponseBody(response.body())
+                        ));
                     }
 
-                    IOException exception = new IOException(
-                            "Discord returned HTTP " + response.statusCode()
-                                    + formatResponseBody(response.body())
-                    );
-
-                    PluginLogger.errorReduced(
+                    PluginLogger.debug(
                             LOG_PREFIX,
-                            exception,
-                            "Discord rejected webhook request."
+                            "Webhook delivered with HTTP {}.",
+                            response.statusCode()
                     );
-
-                    return CompletableFuture.failedFuture(exception);
                 })
-                .exceptionallyCompose(exception -> {
-                    Throwable cause = exception.getCause() == null ? exception : exception.getCause();
-
-                    if (!(cause instanceof IOException
-                            && cause.getMessage() != null
-                            && cause.getMessage().startsWith("Discord returned HTTP "))) {
+                .whenComplete((ignored, exception) -> {
+                    if (exception != null) {
                         PluginLogger.errorReduced(
                                 LOG_PREFIX,
-                                cause,
+                                unwrapCompletionException(exception),
                                 "Discord webhook request failed."
                         );
                     }
-
-                    return CompletableFuture.failedFuture(cause);
                 });
     }
 
@@ -340,6 +327,16 @@ public final class Discord {
         }
 
         return new Discord(url.trim());
+    }
+
+    private static Throwable unwrapCompletionException(Throwable throwable) {
+        Throwable current = throwable;
+
+        while (current instanceof CompletionException && current.getCause() != null) {
+            current = current.getCause();
+        }
+
+        return current;
     }
 
     private static String formatResponseBody(String body) {
