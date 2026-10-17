@@ -943,7 +943,7 @@ public final class Discord {
 
             queued.webhook()
                     .executeAsync(target.getMaxAttempts())
-                    .whenComplete((ignored, exception) -> {
+                    .whenComplete((_, exception) -> {
                         if (exception == null) {
                             queued.completion().complete(null);
                         } else {
