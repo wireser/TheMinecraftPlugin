@@ -32,6 +32,7 @@ import com.wireser.minecraft.listeners.player.PlayerInteractAtEntity;
 import com.wireser.minecraft.listeners.player.PlayerJoin;
 import com.wireser.minecraft.listeners.player.PlayerQuit;
 import com.wireser.minecraft.listeners.player.PlayerRespawn;
+import com.wireser.minecraft.lib.Discord;
 import com.wireser.minecraft.managers.ConfigManager;
 import com.wireser.minecraft.managers.LanguageManager;
 import com.wireser.minecraft.managers.ModuleManager;
@@ -148,6 +149,8 @@ public final class TheMinecraftPlugin extends JavaPlugin
         // module-specific configuration separately.
         configMain = new ConfigManager(this, "config");
         configMain.setup();
+
+        Discord.reloadConfiguration();
 
         database = new Database(this, configMain);
         if (!database.initializeAndStartWatchdog()) {
