@@ -167,3 +167,22 @@ Database:
     #   - true  if the database is critical to plugin functionality.
     #   - false if the plugin should keep running in a degraded mode.
     FailFast: true
+
+# =============================================================================
+# Discord integration
+# =============================================================================
+Discord:
+  # Outbound webhook URLs used for server-to-Discord messages.
+  #
+  # Webhook URLs contain authentication tokens. Keep production values only in
+  # the server's local config.yml and never commit real webhook URLs to source
+  # control. Leave unused destinations empty.
+  Webhooks:
+    Anno: ""
+    General: ""
+    Prius: ""
+    Support: ""
+    Ticket: ""
+    Update: ""
+    InGameChat: ""
+
