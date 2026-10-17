@@ -28,69 +28,63 @@ import com.wireser.minecraft.utils.PluginLogger;
 /**
  * Sends messages from the Minecraft server to configured Discord webhooks.
  *
- * <p>Configured webhook targets use ordered outbound queues. Only one request per
- * target is in flight at a time, preserving message order and preventing a burst
- * of queued messages from being released simultaneously after a network delay.</p>
+ * <p>Configuration is loaded into an immutable in-memory snapshot. Reloading
+ * replaces that snapshot for newly queued messages without changing messages
+ * that are already waiting for delivery.</p>
  *
- * <p>Requests are asynchronous and never wait on the Paper server thread.
- * Discord-to-server communication requires a separate Discord bot/gateway
- * connection.</p>
+ * <p>Each webhook target has an ordered asynchronous queue. Only one request per
+ * target is in flight at a time, preserving message order without blocking the
+ * Paper server thread.</p>
  */
 public final class Discord {
 
     private static final String LOG_PREFIX = "Discord";
-    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
     private static final long RATE_LIMIT_BUFFER_MS = 50L;
-
-    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
-            .connectTimeout(REQUEST_TIMEOUT)
-            .build();
 
     private static final Map<WebhookTarget, OutboundQueue> OUTBOUND_QUEUES =
             createOutboundQueues();
 
+    private static volatile DiscordSettings settings;
+
     private final String url;
+    private final HttpClient httpClient;
+    private final Duration requestTimeout;
+    private final List<Long> retryDelaysMillis;
+
     private String content;
     private String username;
     private String avatarUrl;
     private boolean tts;
     private final List<EmbedObject> embeds = new ArrayList<>();
 
+    private enum QueuePolicy {
+        STANDARD,
+        IMPORTANT,
+        CHAT
+    }
+
     /**
      * Configured outbound Discord webhook destinations.
-     *
-     * <p>Each target defines its configuration path, maximum pending queue size,
-     * and maximum number of delivery attempts per message.</p>
      */
     public enum WebhookTarget {
-        ANNO("Discord.Webhooks.Anno", 250, 4),
-        GENERAL("Discord.Webhooks.General", 250, 4),
-        PRIUS("Discord.Webhooks.Prius", 250, 4),
-        SUPPORT("Discord.Webhooks.Support", 1_000, 6),
-        TICKET("Discord.Webhooks.Ticket", 1_000, 6),
-        UPDATE("Discord.Webhooks.Update", 250, 4),
-        IG_CHAT_MESSAGE("Discord.Webhooks.InGameChat", 500, 4);
+        ANNO("Discord.Webhooks.Anno", QueuePolicy.STANDARD),
+        GENERAL("Discord.Webhooks.General", QueuePolicy.STANDARD),
+        PRIUS("Discord.Webhooks.Prius", QueuePolicy.STANDARD),
+        SUPPORT("Discord.Webhooks.Support", QueuePolicy.IMPORTANT),
+        TICKET("Discord.Webhooks.Ticket", QueuePolicy.IMPORTANT),
+        UPDATE("Discord.Webhooks.Update", QueuePolicy.STANDARD),
+        IG_CHAT_MESSAGE("Discord.Webhooks.InGameChat", QueuePolicy.CHAT);
 
         private final String configPath;
-        private final int queueLimit;
-        private final int maxAttempts;
+        private final QueuePolicy queuePolicy;
 
-        WebhookTarget(String configPath, int queueLimit, int maxAttempts) {
+        WebhookTarget(String configPath, QueuePolicy queuePolicy) {
             this.configPath = configPath;
-            this.queueLimit = queueLimit;
-            this.maxAttempts = maxAttempts;
+            this.queuePolicy = queuePolicy;
         }
 
         public String getConfigPath() {
             return configPath;
-        }
-
-        public int getQueueLimit() {
-            return queueLimit;
-        }
-
-        public int getMaxAttempts() {
-            return maxAttempts;
         }
     }
 
@@ -138,15 +132,52 @@ public final class Discord {
     }
 
     /**
-     * Sends a fully formatted player chat line to Discord as normal webhook content.
+     * Loads and validates Discord settings from the main plugin configuration.
      *
-     * <p>The message enters the target's ordered outbound queue. The method does
-     * not add a player name, prefix, color, or embed formatting.</p>
+     * <p>A successful reload atomically replaces the in-memory settings used for
+     * future messages. Existing queued messages retain the URL and delivery policy
+     * captured when they were enqueued.</p>
+     *
+     * @return {@code true} when the new configuration was loaded successfully
+     */
+    public static synchronized boolean reloadConfiguration() {
+        TheMinecraftPlugin plugin = TheMinecraftPlugin.getInstance();
+
+        if (plugin == null || plugin.getMainConfig() == null
+                || plugin.getMainConfig().getConfig() == null) {
+            PluginLogger.error(
+                    LOG_PREFIX,
+                    "Cannot load Discord configuration before the main configuration is available."
+            );
+            return false;
+        }
+
+        try {
+            DiscordSettings loaded = loadSettings(plugin.getMainConfig().getConfig());
+            settings = loaded;
+
+            PluginLogger.info(
+                    LOG_PREFIX,
+                    "Configuration loaded: {} webhook target(s) enabled.",
+                    loaded.webhookUrls().size()
+            );
+            return true;
+        } catch (IllegalStateException exception) {
+            PluginLogger.errorReduced(
+                    LOG_PREFIX,
+                    exception,
+                    "Discord configuration is invalid; keeping the previous settings."
+            );
+            return false;
+        }
+    }
+
+    /**
+     * Sends a fully formatted player chat line to Discord as normal webhook content.
      *
      * @param target configured webhook destination
      * @param message complete chat line to send
      * @return future completed when the message is delivered or permanently fails
-     * @throws NullPointerException if {@code target} or {@code message} is {@code null}
      */
     public static CompletableFuture<Void> sendAsPlayer(
             WebhookTarget target,
@@ -154,21 +185,19 @@ public final class Discord {
     ) {
         Objects.requireNonNull(message, "message");
 
-        Discord webhook = fromConfig(target);
-        if (webhook == null) {
+        PreparedWebhook prepared = fromSettings(target);
+        if (prepared == null) {
             return CompletableFuture.completedFuture(null);
         }
 
-        webhook.setTts(false);
-        webhook.setContent(message);
+        prepared.webhook().setTts(false);
+        prepared.webhook().setContent(message);
 
-        return enqueue(target, webhook);
+        return enqueue(prepared);
     }
 
     /**
      * Sends an embedded server notification to Discord.
-     *
-     * <p>The message enters the target's ordered outbound queue.</p>
      *
      * @param target configured webhook destination
      * @param color embed accent color
@@ -185,32 +214,32 @@ public final class Discord {
         Objects.requireNonNull(color, "color");
         Objects.requireNonNull(message, "message");
 
-        Discord webhook = fromConfig(target);
-        if (webhook == null) {
+        PreparedWebhook prepared = fromSettings(target);
+        if (prepared == null) {
             return CompletableFuture.completedFuture(null);
         }
 
-        webhook.setTts(false);
-        webhook.addEmbed(new EmbedObject()
+        prepared.webhook().setTts(false);
+        prepared.webhook().addEmbed(new EmbedObject()
                 .setDescription(message)
                 .setTitle(title)
                 .setColor(color.getColor()));
 
-        return enqueue(target, webhook);
+        return enqueue(prepared);
     }
 
     /**
-     * Creates a webhook message for a Discord webhook URL.
-     *
-     * <p>Messages created directly with this constructor are not associated with
-     * a configured target queue. Call {@link #executeAsync()} to send them with
-     * the default retry policy.</p>
+     * Creates a webhook message for a Discord webhook URL using the currently
+     * loaded transport and retry settings.
      *
      * @param url Discord webhook URL
-     * @throws NullPointerException if {@code url} is {@code null}
-     * @throws IllegalArgumentException if {@code url} is blank
+     * @throws IllegalStateException if Discord configuration has not been loaded
      */
     public Discord(String url) {
+        this(url, requireSettings());
+    }
+
+    private Discord(String url, DiscordSettings settingsSnapshot) {
         Objects.requireNonNull(url, "url");
 
         if (url.isBlank()) {
@@ -218,6 +247,9 @@ public final class Discord {
         }
 
         this.url = url;
+        this.httpClient = settingsSnapshot.httpClient();
+        this.requestTimeout = settingsSnapshot.requestTimeout();
+        this.retryDelaysMillis = settingsSnapshot.retryDelaysMillis();
     }
 
     public void setContent(String content) {
@@ -241,17 +273,13 @@ public final class Discord {
     }
 
     /**
-     * Sends this webhook asynchronously using four total delivery attempts.
-     *
-     * <p>Network failures and HTTP 5xx responses use bounded backoff retries.
-     * HTTP 429 responses use Discord's supplied retry delay. Other non-success
-     * responses fail immediately.</p>
+     * Sends this webhook asynchronously using the configured standard retry policy.
      *
      * @return future completed when the webhook is delivered or permanently fails
-     * @throws IllegalStateException if neither content nor an embed has been supplied
      */
     public CompletableFuture<Void> executeAsync() {
-        return executeAsync(4);
+        DiscordSettings current = requireSettings();
+        return executeAsync(current.defaultMaxAttempts());
     }
 
     private CompletableFuture<Void> executeAsync(int maxAttempts) {
@@ -259,16 +287,16 @@ public final class Discord {
             throw new IllegalStateException("Set content or add at least one EmbedObject.");
         }
 
-        if (maxAttempts < 1) {
-            throw new IllegalArgumentException("maxAttempts must be at least 1.");
-        }
-
         String payload;
 
         try {
             payload = createPayload().toString();
         } catch (RuntimeException exception) {
-            PluginLogger.errorReduced(LOG_PREFIX, exception, "Could not serialize Discord webhook payload.");
+            PluginLogger.errorReduced(
+                    LOG_PREFIX,
+                    exception,
+                    "Could not serialize Discord webhook payload."
+            );
             return CompletableFuture.failedFuture(exception);
         }
 
@@ -288,12 +316,16 @@ public final class Discord {
         try {
             request = createRequest(payload);
         } catch (RuntimeException exception) {
-            PluginLogger.errorReduced(LOG_PREFIX, exception, "Could not build Discord webhook request.");
+            PluginLogger.errorReduced(
+                    LOG_PREFIX,
+                    exception,
+                    "Could not build Discord webhook request."
+            );
             result.completeExceptionally(exception);
             return;
         }
 
-        HTTP_CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+        httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
                 .whenComplete((response, throwable) -> {
                     if (throwable != null) {
                         Throwable cause = unwrapCompletionException(throwable);
@@ -312,7 +344,12 @@ public final class Discord {
 
                             schedule(
                                     delay,
-                                    () -> sendAttempt(payload, attempt + 1, maxAttempts, result)
+                                    () -> sendAttempt(
+                                            payload,
+                                            attempt + 1,
+                                            maxAttempts,
+                                            result
+                                    )
                             );
                             return;
                         }
@@ -396,7 +433,8 @@ public final class Discord {
         }
 
         IOException exception = new IOException(
-                "Discord returned HTTP " + status + formatResponseBody(response.body())
+                "Discord returned HTTP " + status
+                        + formatResponseBody(response.body())
         );
 
         PluginLogger.errorReduced(
@@ -410,7 +448,7 @@ public final class Discord {
 
     private HttpRequest createRequest(String payload) {
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(URI.create(url))
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(requestTimeout)
                 .header("Content-Type", "application/json");
 
         TheMinecraftPlugin plugin = TheMinecraftPlugin.getInstance();
@@ -456,14 +494,14 @@ public final class Discord {
         return json;
     }
 
-    private static CompletableFuture<Void> enqueue(
-            WebhookTarget target,
-            Discord webhook
-    ) {
-        Objects.requireNonNull(target, "target");
-        Objects.requireNonNull(webhook, "webhook");
-
-        return OUTBOUND_QUEUES.get(target).enqueue(webhook);
+    private static CompletableFuture<Void> enqueue(PreparedWebhook prepared) {
+        return OUTBOUND_QUEUES
+                .get(prepared.target())
+                .enqueue(
+                        prepared.webhook(),
+                        prepared.queueLimit(),
+                        prepared.maxAttempts()
+                );
     }
 
     private static Map<WebhookTarget, OutboundQueue> createOutboundQueues() {
@@ -477,32 +515,246 @@ public final class Discord {
         return Map.copyOf(queues);
     }
 
-    private static Discord fromConfig(WebhookTarget target) {
+    private static PreparedWebhook fromSettings(WebhookTarget target) {
         Objects.requireNonNull(target, "target");
 
-        TheMinecraftPlugin plugin = TheMinecraftPlugin.getInstance();
-        if (plugin == null || plugin.getMainConfig() == null) {
+        DiscordSettings current = settings;
+        if (current == null) {
             PluginLogger.error(
                     LOG_PREFIX,
-                    "Cannot send webhook before the main configuration is available."
+                    "Cannot send webhook before Discord configuration is loaded."
             );
             return null;
         }
 
-        FileConfiguration config = plugin.getMainConfig().getConfig();
-        String url = config.getString(target.getConfigPath());
+        String url = current.webhookUrls().get(target);
 
-        if (url == null || url.isBlank()) {
+        if (url == null) {
             PluginLogger.warn(
                     LOG_PREFIX,
-                    "Webhook target {} is not configured at {}.",
-                    target,
-                    target.getConfigPath()
+                    "Webhook target {} is not configured.",
+                    target
             );
             return null;
         }
 
-        return new Discord(url.trim());
+        return new PreparedWebhook(
+                target,
+                new Discord(url, current),
+                current.queueLimit(target.queuePolicy),
+                current.maxAttempts(target.queuePolicy)
+        );
+    }
+
+    private static DiscordSettings loadSettings(FileConfiguration config) {
+        long requestTimeoutMs = requiredLong(
+                config,
+                "Discord.RequestTimeoutMs",
+                1_000L,
+                60_000L
+        );
+
+        int defaultMaxAttempts = requiredInt(
+                config,
+                "Discord.Retry.DefaultMaxAttempts",
+                1,
+                10
+        );
+
+        int importantMaxAttempts = requiredInt(
+                config,
+                "Discord.Retry.ImportantMaxAttempts",
+                1,
+                10
+        );
+
+        List<Long> retryDelays = requiredLongList(
+                config,
+                "Discord.Retry.DelaysMs",
+                0L,
+                60_000L
+        );
+
+        int defaultQueueLimit = requiredInt(
+                config,
+                "Discord.Queues.DefaultLimit",
+                1,
+                100_000
+        );
+
+        int chatQueueLimit = requiredInt(
+                config,
+                "Discord.Queues.ChatLimit",
+                1,
+                100_000
+        );
+
+        int importantQueueLimit = requiredInt(
+                config,
+                "Discord.Queues.ImportantLimit",
+                1,
+                100_000
+        );
+
+        Map<WebhookTarget, String> webhookUrls =
+                new EnumMap<>(WebhookTarget.class);
+
+        for (WebhookTarget target : WebhookTarget.values()) {
+            String url = optionalString(config, target.configPath);
+
+            if (url != null) {
+                validateWebhookUrl(url, target.configPath);
+                webhookUrls.put(target, url);
+            }
+        }
+
+        Duration requestTimeout = Duration.ofMillis(requestTimeoutMs);
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(requestTimeout)
+                .build();
+
+        return new DiscordSettings(
+                requestTimeout,
+                List.copyOf(retryDelays),
+                defaultMaxAttempts,
+                importantMaxAttempts,
+                defaultQueueLimit,
+                chatQueueLimit,
+                importantQueueLimit,
+                Map.copyOf(webhookUrls),
+                client
+        );
+    }
+
+    private static int requiredInt(
+            FileConfiguration config,
+            String path,
+            int min,
+            int max
+    ) {
+        if (!config.isInt(path)) {
+            throw new IllegalStateException(path + " must be an integer.");
+        }
+
+        int value = config.getInt(path);
+
+        if (value < min || value > max) {
+            throw new IllegalStateException(
+                    path + " must be between " + min + " and " + max + "."
+            );
+        }
+
+        return value;
+    }
+
+    private static long requiredLong(
+            FileConfiguration config,
+            String path,
+            long min,
+            long max
+    ) {
+        if (!(config.isInt(path) || config.isLong(path))) {
+            throw new IllegalStateException(path + " must be an integer.");
+        }
+
+        long value = config.getLong(path);
+
+        if (value < min || value > max) {
+            throw new IllegalStateException(
+                    path + " must be between " + min + " and " + max + "."
+            );
+        }
+
+        return value;
+    }
+
+    private static List<Long> requiredLongList(
+            FileConfiguration config,
+            String path,
+            long min,
+            long max
+    ) {
+        List<?> raw = config.getList(path);
+
+        if (raw == null || raw.isEmpty()) {
+            throw new IllegalStateException(path + " must contain at least one value.");
+        }
+
+        List<Long> values = new ArrayList<>(raw.size());
+
+        for (Object item : raw) {
+            if (!(item instanceof Number number)) {
+                throw new IllegalStateException(path + " must contain only numbers.");
+            }
+
+            long value = number.longValue();
+
+            if (value < min || value > max) {
+                throw new IllegalStateException(
+                        path + " values must be between " + min + " and " + max + "."
+                );
+            }
+
+            values.add(value);
+        }
+
+        return values;
+    }
+
+    private static String optionalString(
+            FileConfiguration config,
+            String path
+    ) {
+        if (!config.contains(path)) {
+            return null;
+        }
+
+        if (!config.isString(path)) {
+            throw new IllegalStateException(path + " must be a string.");
+        }
+
+        String value = config.getString(path);
+
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+
+        return value.trim();
+    }
+
+    private static void validateWebhookUrl(String value, String path) {
+        URI uri;
+
+        try {
+            uri = URI.create(value);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException(path + " is not a valid URI.", exception);
+        }
+
+        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) {
+            throw new IllegalStateException(path + " must be an HTTPS URL.");
+        }
+    }
+
+    private static DiscordSettings requireSettings() {
+        DiscordSettings current = settings;
+
+        if (current == null) {
+            throw new IllegalStateException(
+                    "Discord configuration has not been loaded."
+            );
+        }
+
+        return current;
+    }
+
+    private long backoffDelayMillis(int failedAttempt) {
+        int index = Math.min(
+                Math.max(0, failedAttempt - 1),
+                retryDelaysMillis.size() - 1
+        );
+
+        return retryDelaysMillis.get(index);
     }
 
     private static long retryAfterMillis(HttpResponse<String> response) {
@@ -520,7 +772,7 @@ public final class Discord {
                     ) + RATE_LIMIT_BUFFER_MS;
                 }
             } catch (RuntimeException ignored) {
-                // Fall through to the standard rate-limit header.
+                // Use the rate-limit header when the response body is unavailable.
             }
         }
 
@@ -569,14 +821,6 @@ public final class Discord {
         } catch (NumberFormatException exception) {
             return fallback;
         }
-    }
-
-    private static long backoffDelayMillis(int failedAttempt) {
-        return switch (failedAttempt) {
-            case 1 -> 1_000L;
-            case 2 -> 2_000L;
-            default -> 5_000L;
-        };
     }
 
     private static void schedule(long delayMillis, Runnable task) {
@@ -889,17 +1133,23 @@ public final class Discord {
             this.target = target;
         }
 
-        private CompletableFuture<Void> enqueue(Discord webhook) {
+        private CompletableFuture<Void> enqueue(
+                Discord webhook,
+                int queueLimit,
+                int maxAttempts
+        ) {
             CompletableFuture<Void> completion = new CompletableFuture<>();
             QueuedWebhook dropped = null;
             boolean startProcessing = false;
 
             synchronized (this) {
-                if (pending.size() >= target.getQueueLimit()) {
+                if (pending.size() >= queueLimit) {
                     dropped = pending.pollFirst();
                 }
 
-                pending.addLast(new QueuedWebhook(webhook, completion));
+                pending.addLast(
+                        new QueuedWebhook(webhook, maxAttempts, completion)
+                );
 
                 if (!processing) {
                     processing = true;
@@ -918,7 +1168,7 @@ public final class Discord {
                         LOG_PREFIX,
                         "Webhook queue {} reached its {} message limit; dropped the oldest pending message.",
                         target,
-                        target.getQueueLimit()
+                        queueLimit
                 );
             }
 
@@ -942,8 +1192,8 @@ public final class Discord {
             }
 
             queued.webhook()
-                    .executeAsync(target.getMaxAttempts())
-                    .whenComplete((_, exception) -> {
+                    .executeAsync(queued.maxAttempts())
+                    .whenComplete((ignored, exception) -> {
                         if (exception == null) {
                             queued.completion().complete(null);
                         } else {
@@ -952,15 +1202,48 @@ public final class Discord {
                             );
                         }
 
-                        // Schedule the next drain step to avoid recursive stack growth
-                        // if a request fails before asynchronous HTTP dispatch begins.
                         CompletableFuture.runAsync(this::processNext);
                     });
         }
     }
 
+    private record DiscordSettings(
+            Duration requestTimeout,
+            List<Long> retryDelaysMillis,
+            int defaultMaxAttempts,
+            int importantMaxAttempts,
+            int defaultQueueLimit,
+            int chatQueueLimit,
+            int importantQueueLimit,
+            Map<WebhookTarget, String> webhookUrls,
+            HttpClient httpClient
+    ) {
+        private int maxAttempts(QueuePolicy policy) {
+            return policy == QueuePolicy.IMPORTANT
+                    ? importantMaxAttempts
+                    : defaultMaxAttempts;
+        }
+
+        private int queueLimit(QueuePolicy policy) {
+            return switch (policy) {
+                case STANDARD -> defaultQueueLimit;
+                case IMPORTANT -> importantQueueLimit;
+                case CHAT -> chatQueueLimit;
+            };
+        }
+    }
+
+    private record PreparedWebhook(
+            WebhookTarget target,
+            Discord webhook,
+            int queueLimit,
+            int maxAttempts
+    ) {
+    }
+
     private record QueuedWebhook(
             Discord webhook,
+            int maxAttempts,
             CompletableFuture<Void> completion
     ) {
     }
